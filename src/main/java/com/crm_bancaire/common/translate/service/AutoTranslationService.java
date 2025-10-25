@@ -3,7 +3,10 @@ package com.crm_bancaire.common.translate.service;
 import com.crm_bancaire.common.translate.annotation.NoTranslate;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -26,7 +30,16 @@ import java.util.concurrent.TimeUnit;
 public class AutoTranslationService {
     private final RestTemplate restTemplate;
     private final RedisTemplate<String, String> redisTemplate;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private ObjectMapper objectMapper;
+
+    @PostConstruct
+    public void init() {
+        // Configure ObjectMapper to handle Java 8 date/time types
+        this.objectMapper = new ObjectMapper();
+        this.objectMapper.registerModule(new JavaTimeModule());
+        this.objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        log.info("AutoTranslationService initialized with Java 8 date/time support");
+    }
 
     @Value("${translate.source-language:fr}")
     private String sourceLanguage;
@@ -113,26 +126,81 @@ public class AutoTranslationService {
     }
 
     /**
-     * Translates all String fields in an object recursively.
-     * Respects @NoTranslate annotations and field exclusion list.
+     * Translates an object to JsonNode WITHOUT round-trip conversion.
+     * Returns JsonNode to avoid enum/date deserialization issues.
      *
      * @param obj        Object to translate
      * @param targetLang Target language code
-     * @param <T>        Type of the object
-     * @return Translated object
+     * @return JsonNode with translated string fields
      */
-    public <T> T translateObject(T obj, String targetLang) {
+    public JsonNode translateToJsonNode(Object obj, String targetLang) {
         if (sourceLanguage.equals(targetLang) || obj == null) {
-            return obj;
+            return objectMapper.valueToTree(obj);
         }
 
         try {
             JsonNode node = objectMapper.valueToTree(obj);
             translateNode(node, targetLang, obj.getClass());
-            return objectMapper.treeToValue(node, (Class<T>) obj.getClass());
+            return node; // Return JsonNode directly, no round-trip!
         } catch (Exception e) {
             log.error("Object translation failed", e);
-            return obj;
+            return objectMapper.valueToTree(obj);
+        }
+    }
+
+    /**
+     * Translates a List of objects to JsonNode array.
+     *
+     * @param list       List to translate
+     * @param targetLang Target language code
+     * @return JsonNode array with translated elements
+     */
+    public JsonNode translateList(List<?> list, String targetLang) {
+        if (sourceLanguage.equals(targetLang) || list == null || list.isEmpty()) {
+            return objectMapper.valueToTree(list);
+        }
+
+        try {
+            JsonNode arrayNode = objectMapper.valueToTree(list);
+            if (arrayNode.isArray()) {
+                for (JsonNode item : arrayNode) {
+                    translateNode(item, targetLang, Object.class);
+                }
+            }
+            return arrayNode;
+        } catch (Exception e) {
+            log.error("List translation failed", e);
+            return objectMapper.valueToTree(list);
+        }
+    }
+
+    /**
+     * Translates a Page of objects to JsonNode with pagination metadata.
+     *
+     * @param page       Page to translate
+     * @param targetLang Target language code
+     * @return JsonNode with translated content and preserved pagination
+     */
+    public JsonNode translatePage(org.springframework.data.domain.Page<?> page, String targetLang) {
+        if (sourceLanguage.equals(targetLang) || page == null) {
+            return objectMapper.valueToTree(page);
+        }
+
+        try {
+            JsonNode pageNode = objectMapper.valueToTree(page);
+
+            // Translate only the 'content' array, preserve pagination metadata
+            JsonNode contentNode = pageNode.get("content");
+            if (contentNode != null && contentNode.isArray()) {
+                for (JsonNode item : contentNode) {
+                    translateNode(item, targetLang, Object.class);
+                }
+            }
+
+            return pageNode;
+        } catch (Exception e) {
+            log.error("Page translation failed", e);
+            return objectMapper.valueToTree(page);
         }
     }
 
@@ -160,7 +228,8 @@ public class AutoTranslationService {
                 // Translate text fields
                 if (value.isTextual()) {
                     String text = value.asText();
-                    if (!isNonTranslatable(text)) {
+                    // Don't translate if it's non-translatable OR looks like an enum
+                    if (!isNonTranslatable(text) && !looksLikeEnum(text)) {
                         String translated = translate(text, targetLang);
                         ((ObjectNode) node).put(fieldName, translated);
                     }
@@ -221,6 +290,47 @@ public class AutoTranslationService {
         }
 
         return false;
+    }
+
+    /**
+     * Determines if text looks like an enum value.
+     * Enum values are typically UPPERCASE with underscores, no spaces, and short.
+     *
+     * Examples: CLIENT, ADMIN, SUPER_ADMIN, ACTIF, PENDING_APPROVAL
+     */
+    private boolean looksLikeEnum(String text) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+
+        // Enum values are typically short
+        if (text.length() > 50) {
+            return false;
+        }
+
+        // Enum values don't contain spaces
+        if (text.contains(" ")) {
+            return false;
+        }
+
+        // Check if it's mostly uppercase letters and underscores
+        // Allow some lowercase (mixed case enums exist) but mostly uppercase
+        String uppercaseOnly = text.replaceAll("[^A-Z]", "");
+        String lettersOnly = text.replaceAll("[^A-Za-z]", "");
+
+        if (lettersOnly.isEmpty()) {
+            return false; // Not an enum if no letters
+        }
+
+        // If more than 70% uppercase letters, likely an enum
+        double uppercaseRatio = (double) uppercaseOnly.length() / lettersOnly.length();
+        boolean isLikelyEnum = uppercaseRatio > 0.7;
+
+        if (isLikelyEnum) {
+            log.trace("Detected enum-like value, skipping translation: {}", text);
+        }
+
+        return isLikelyEnum;
     }
 
     /**

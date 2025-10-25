@@ -5,6 +5,36 @@ All notable changes to the `common-translate` module will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2024-10-25
+
+### Fixed
+- 🐛 **Jackson LocalDateTime support**: Added `jackson-datatype-jsr310` dependency to handle Java 8 date/time types
+- 🐛 **Enum translation issue**: Implemented smart enum detection to prevent translation of enum values
+
+### Added
+- ✨ **JsonNode-based translation**: No more round-trip conversion! Object → JsonNode → Translate → Return JsonNode
+- 🧠 **Smart enum detection**: Automatically detects and skips UPPERCASE enum values (CLIENT, ADMIN, etc.)
+- 📦 **Full object support**: Translates UserResponse, ModuleResponse, List, Page without breaking enums/dates
+
+### Changed
+- Translation now returns JsonNode instead of reconverted objects (avoids deserialization errors)
+- Enum values (>70% uppercase) are automatically skipped
+- Dates, IDs, emails remain unchanged via smart detection
+
+**What Gets Translated**:
+- ✅ String messages: `"Utilisateur créé"` → `"User created"`
+- ✅ Object descriptions/titles: `{title: "Gestion",...}` → `{title: "Management",...}`
+- ✅ Lists and Pages: All items translated
+- ❌ Enums: `"CLIENT"`, `"ADMIN"` → Unchanged (detected as enums)
+- ❌ Dates: `"2024-10-25"` → Unchanged (auto-detected)
+- ❌ Personal data: `firstName`, `lastName`, `email` → Unchanged (@NoTranslate / excluded fields)
+
+### Technical Details
+- Object → JsonNode → Translate strings in-place → Return JsonNode (Spring serializes)
+- No round-trip conversion = no enum/date errors
+- Enum detection: checks for >70% uppercase letters, no spaces, length < 50
+- Works with all response types: Single objects, List, Page
+
 ## [1.0.0] - 2024-10-25
 
 ### Added

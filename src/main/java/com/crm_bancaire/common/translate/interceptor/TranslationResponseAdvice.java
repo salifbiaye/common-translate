@@ -73,31 +73,25 @@ public class TranslationResponseAdvice implements ResponseBodyAdvice<Object> {
         log.debug("Translating response to language: {}", targetLang);
 
         try {
-            // Translate based on response type
+            // Translate String responses (messages, errors)
             if (body instanceof String) {
                 return translationService.translate((String) body, targetLang);
             }
-            else if (body instanceof Page) {
-                // Handle paginated responses
-                Page<?> page = (Page<?>) body;
-                List<?> translatedContent = page.getContent().stream()
-                        .map(item -> translationService.translateObject(item, targetLang))
-                        .toList();
 
-                // Return the translated page (Spring Data will handle the serialization)
-                return page.map(item -> translationService.translateObject(item, targetLang));
+            // Translate complex objects (UserResponse, Module, etc.)
+            // WITHOUT round-trip: Object → JsonNode → Translate → Return JsonNode
+            // Spring will serialize the JsonNode, avoiding enum/date issues
+            if (body instanceof Page) {
+                return translationService.translatePage((Page<?>) body, targetLang);
             }
             else if (body instanceof List) {
-                // Handle list responses
-                List<?> list = (List<?>) body;
-                return list.stream()
-                        .map(item -> translationService.translateObject(item, targetLang))
-                        .toList();
+                return translationService.translateList((List<?>) body, targetLang);
             }
             else {
-                // Handle single object responses (UserResponse, AccountResponse, etc.)
-                return translationService.translateObject(body, targetLang);
+                // Single object (UserResponse, ModuleResponse, etc.)
+                return translationService.translateToJsonNode(body, targetLang);
             }
+
         } catch (Exception e) {
             log.error("Translation failed, returning original response", e);
             return body;
