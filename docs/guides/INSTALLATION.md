@@ -234,8 +234,8 @@ If translations are slow (>500ms):
 
 ## Next Steps
 
-- 📖 Read the [Usage Guide](./USAGE.md)
-- ⚙️ See [Configuration Options](./CONFIGURATION.md)
+- 📖 Read the [Usage Guide](USAGE.md)
+- ⚙️ See [Configuration Options](CONFIGURATION.md)
 - 📝 Check [Examples](../examples/)
 
 ---

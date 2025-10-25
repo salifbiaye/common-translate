@@ -499,6 +499,6 @@ curl http://localhost:5000/languages
 
 ## Next Steps
 
-- 📖 Read [Usage Guide](./USAGE.md)
+- 📖 Read [Usage Guide](USAGE.md)
 - 📝 Check [Examples](../examples/)
 - 🔧 See [Troubleshooting Guide](./TROUBLESHOOTING.md)

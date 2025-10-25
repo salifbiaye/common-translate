@@ -423,6 +423,6 @@ function UserProfile({ userId }) {
 
 ## Next Steps
 
-- ⚙️ See [Configuration Options](./CONFIGURATION.md)
+- ⚙️ See [Configuration Options](CONFIGURATION.md)
 - 📝 Check [Examples](../examples/)
 - 🔧 Read [Troubleshooting](./TROUBLESHOOTING.md)
