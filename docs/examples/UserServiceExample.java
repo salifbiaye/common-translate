@@ -2,6 +2,7 @@ package com.example.userservice;
 
 import com.crm_bancaire.common.translate.annotation.EnableAutoTranslate;
 import com.crm_bancaire.common.translate.annotation.NoTranslate;
+import com.crm_bancaire.common.translate.annotation.Translatable;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.SpringApplication;
@@ -16,13 +17,16 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * Complete example showing how to use common-translate in a User Service.
+ * Complete example showing how to use common-translate in a User Service (v1.0.2+).
  *
  * Features demonstrated:
  * - @EnableAutoTranslate activation
  * - @NoTranslate on personal data fields
+ * - @Translatable for field metadata exposure
+ * - Automatic enum label generation ({fieldName}Label)
  * - Automatic translation of enums and descriptions
  * - Support for single objects, lists, and paginated responses
+ * - Field metadata API for forms and tables
  * - Zero translation code in controllers
  */
 
@@ -44,6 +48,7 @@ public class UserServiceApplication {
 
 @Entity
 @Table(name = "users")
+@Translatable(name = "User", description = "User management entity with automatic field metadata")
 @Data
 class User {
     @Id
@@ -331,5 +336,61 @@ curl -X POST \
 
 RESPONSE:
 "User created successfully"  // ← Translated from "Utilisateur créé avec succès"
+
+═══════════════════════════════════════════════════════════════════════════
+
+ENUM LABELS (v1.0.2+):
+──────────────────────
+curl -H "Accept-Language: en" http://localhost:8080/api/users/123
+
+RESPONSE WITH AUTOMATIC ENUM LABELS:
+{
+  "id": "123",
+  "firstName": "Salif",
+  "lastName": "Biaye",
+  "email": "salif@example.com",
+  "telephone": "+221123456789",
+  "role": "CLIENT",                   // ← Original enum value (for API logic)
+  "roleLabel": "Customer",             // ← AUTO-GENERATED translated label (for UI display)
+  "status": "ACTIF",                   // ← Original enum value
+  "statusLabel": "Active",             // ← AUTO-GENERATED translated label
+  "bio": "Developer passionate about technology",
+  "isActive": true,
+  "createdAt": "2024-10-25T10:30:00"
+}
+
+═══════════════════════════════════════════════════════════════════════════
+
+FIELD METADATA API (v1.0.2+):
+──────────────────────────────
+GET /api/translate/metadata/User?lang=en
+
+RESPONSE:
+{
+  "firstName": "First Name",
+  "lastName": "Last Name",
+  "email": "Email",
+  "telephone": "Telephone",
+  "role": "Role",
+  "status": "Status",
+  "bio": "Bio",
+  "isActive": "Is Active",
+  "createdAt": "Created At"
+}
+
+GET /api/translate/metadata/User?lang=fr
+
+RESPONSE:
+{
+  "firstName": "Prénom",
+  "lastName": "Nom",
+  "email": "Email",
+  "telephone": "Téléphone",
+  "role": "Rôle",
+  "status": "Statut",
+  "bio": "Biographie",
+  "isActive": "Est Actif",
+  "createdAt": "Créé Le"
+}
 
 */

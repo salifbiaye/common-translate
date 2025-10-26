@@ -22,7 +22,7 @@ Automatic translation module for Spring Boot microservices using LibreTranslate 
 <dependency>
     <groupId>com.crm-bancaire</groupId>
     <artifactId>common-translate</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
 </dependency>
 ```
 
@@ -172,7 +172,7 @@ translate:
 
 ## Enum Label Generation
 
-**v1.0.1** automatically adds translated label fields for enum values!
+**v1.0.2** automatically adds translated label fields for enum values!
 
 ### How It Works
 

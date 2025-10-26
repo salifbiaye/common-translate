@@ -14,7 +14,7 @@
 
     <groupId>com.crm-bancaire</groupId>
     <artifactId>common-translate</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
     <name>common-translate</name>
     <description>Automatic translation module with LibreTranslate and Redis cache</description>
 

@@ -3,10 +3,12 @@
 ## Table of Contents
 1. [Basic Configuration](#basic-configuration)
 2. [All Configuration Options](#all-configuration-options)
-3. [Environment-Specific Configuration](#environment-specific-configuration)
-4. [Redis Configuration](#redis-configuration)
-5. [LibreTranslate Configuration](#libretranslate-configuration)
-6. [Performance Tuning](#performance-tuning)
+3. [Enum Label Configuration](#enum-label-configuration-v102)
+4. [Field Metadata Configuration](#field-metadata-configuration-v102)
+5. [Environment-Specific Configuration](#environment-specific-configuration)
+6. [Redis Configuration](#redis-configuration)
+7. [LibreTranslate Configuration](#libretranslate-configuration)
+8. [Performance Tuning](#performance-tuning)
 
 ---
 
@@ -59,6 +61,19 @@ translate:
     # Default: "trans"
     # prefix: "trans"
 
+  # Custom enum label mappings (v1.0.2+)
+  # Optional: Override default enum label generation
+  enum-labels:
+    # Enum class name → enum value mappings
+    UserRole:
+      ADMIN: Administrator
+      CLIENT: Customer
+      CONSEILLER: Advisor
+    UserLevel:
+      LEVEL_1: Level One
+      LEVEL_2: Level Two
+      LEVEL_3: Level Three
+
 # Redis configuration (shared with your app)
 spring:
   data:
@@ -67,6 +82,152 @@ spring:
       port: 6379
       timeout: 2000ms
       database: 0  # Use database 0 (default)
+```
+
+---
+
+## Enum Label Configuration (v1.0.2+)
+
+### Auto-Capitalization (Default)
+
+By default, enum values are automatically capitalized for labels:
+
+```yaml
+# No configuration needed - automatic!
+```
+
+**Examples:**
+- `ADMIN` → `Admin` → Translated to "Admin", "Administrador", etc.
+- `SUPER_USER` → `Super User` → Translated appropriately
+- `LEVEL_1` → `Level 1` → Translated
+
+### Custom Enum Mappings
+
+For more precise labels, configure custom mappings:
+
+```yaml
+translate:
+  enum-labels:
+    # Format: EnumClassName → EnumValue → CustomLabel
+    UserRole:
+      ADMIN: Administrator       # Instead of "Admin"
+      CLIENT: Customer           # Instead of "Client"
+      CONSEILLER: Advisor        # Instead of "Conseiller"
+
+    AccountStatus:
+      ACTIF: Active
+      INACTIF: Inactive
+      SUSPENDU: Suspended
+
+    TransactionType:
+      VIREMENT: Wire Transfer
+      DEPOT: Deposit
+      RETRAIT: Withdrawal
+```
+
+**How it works:**
+1. System detects enum field: `typeUser: "ADMIN"`
+2. Checks for custom mapping in config
+3. If found: Uses `Administrator` → Translates to "Administrator", "Administrateur", "Administrador"
+4. If not found: Auto-capitalizes `ADMIN` → `Admin` → Translates
+
+**Result in API response:**
+```json
+{
+  "typeUser": "ADMIN",              // Preserved for logic
+  "typeUserLabel": "Administrator"   // Translated label (en)
+}
+```
+
+### When to Use Custom Mappings
+
+Use custom mappings when:
+- ✅ Default capitalization is not user-friendly (`SUPER_USER` → prefer "Super User" over "Superuser")
+- ✅ Enum values are abbreviations (`CONSEILLER` → prefer "Advisor" over "Conseiller")
+- ✅ Business terminology differs from technical names
+- ❌ Default capitalization is already good (`ADMIN` → `Admin` is fine)
+
+---
+
+## Field Metadata Configuration (v1.0.2+)
+
+### Enabling Metadata for Entities
+
+Mark entities with `@Translatable` to expose field labels via API:
+
+```java
+import com.crm_bancaire.common.translate.annotation.Translatable;
+
+@Entity
+@Translatable(name = "User", description = "User management entity")
+public class User {
+    private String firstName;  // → "First Name"
+    private String lastName;   // → "Last Name"
+    private String telephone;  // → "Telephone"
+    private UserRole typeUser; // → "Type User"
+}
+```
+
+### Metadata Endpoints
+
+Once configured, these endpoints become available:
+
+**Get field labels:**
+```bash
+GET /api/translate/metadata/User?lang=en
+Response: {"firstName": "First Name", "lastName": "Last Name", ...}
+
+GET /api/translate/metadata/User?lang=fr
+Response: {"firstName": "Prénom", "lastName": "Nom", ...}
+```
+
+**List all entities:**
+```bash
+GET /api/translate/metadata/entities
+Response: ["User", "Account", "Module"]
+```
+
+**Health check:**
+```bash
+GET /api/translate/metadata/health
+Response: {
+  "enabled": true,
+  "sourceLanguage": "fr",
+  "entitiesCount": 3,
+  "entities": ["User", "Account", "Module"]
+}
+```
+
+### Metadata Caching
+
+Metadata is cached in Redis with the same TTL as translations:
+
+```yaml
+translate:
+  cache:
+    ttl: 86400  # Metadata cached for 24h
+```
+
+**Cache keys:**
+- Translation cache: `trans:{lang}:{hashcode}`
+- Metadata cache: `metadata:{entity}:{lang}`
+
+### Excluding Fields from Metadata
+
+Use `@NoTranslate` to exclude fields:
+
+```java
+@Entity
+@Translatable(name = "User")
+public class User {
+    @NoTranslate
+    private String id;  // Won't appear in metadata
+
+    @NoTranslate
+    private String password;  // Won't appear in metadata
+
+    private String firstName;  // Will appear in metadata
+}
 ```
 
 ---

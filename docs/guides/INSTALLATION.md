@@ -75,7 +75,7 @@ Add to your service's `pom.xml`:
     <dependency>
         <groupId>com.crm-bancaire</groupId>
         <artifactId>common-translate</artifactId>
-        <version>1.0.0</version>
+        <version>1.0.2</version>
     </dependency>
 </dependencies>
 ```

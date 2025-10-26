@@ -3,10 +3,12 @@
 ## Table of Contents
 1. [Basic Usage](#basic-usage)
 2. [Excluding Fields from Translation](#excluding-fields-from-translation)
-3. [Supported Response Types](#supported-response-types)
-4. [Language Codes](#language-codes)
-5. [Best Practices](#best-practices)
-6. [Advanced Usage](#advanced-usage)
+3. [Enum Label Generation](#enum-label-generation-v102)
+4. [Field Metadata API](#field-metadata-api-v102)
+5. [Supported Response Types](#supported-response-types)
+6. [Language Codes](#language-codes)
+7. [Best Practices](#best-practices)
+8. [Advanced Usage](#advanced-usage)
 
 ---
 
@@ -122,6 +124,247 @@ id, uuid, email, username, password, token
 firstName, lastName, fullName, keycloakId
 createdAt, updatedAt, dateCreation, dateModification
 telephone, phone, url, uri, sub, iss
+```
+
+---
+
+## Enum Label Generation (v1.0.2+)
+
+Starting with v1.0.2, enum fields automatically get translated label fields for display purposes.
+
+### How It Works
+
+When an enum field is detected, the system automatically adds a `{fieldName}Label` field:
+
+**Controller returns:**
+```json
+{
+  "id": "123",
+  "firstName": "Salif",
+  "typeUser": "ADMIN"
+}
+```
+
+**Client receives (Accept-Language: en):**
+```json
+{
+  "id": "123",
+  "firstName": "Salif",
+  "typeUser": "ADMIN",              // Preserved for API logic
+  "typeUserLabel": "Administrator"   // Added for UI display (translated)
+}
+```
+
+**Client receives (Accept-Language: es):**
+```json
+{
+  "id": "123",
+  "firstName": "Salif",
+  "typeUser": "ADMIN",
+  "typeUserLabel": "Administrador"   // Spanish translation
+}
+```
+
+### Using Enum Labels in Frontend
+
+**React example:**
+```jsx
+function UserProfile({ user }) {
+  return (
+    <div>
+      <h1>{user.firstName}</h1>
+      {/* Use label for display */}
+      <Badge>{user.typeUserLabel}</Badge>
+
+      {/* Use value for logic */}
+      {user.typeUser === 'ADMIN' && <AdminPanel />}
+    </div>
+  );
+}
+```
+
+**Vue example:**
+```vue
+<template>
+  <div>
+    <h1>{{ user.firstName }}</h1>
+    <!-- Use label for display -->
+    <span class="badge">{{ user.typeUserLabel }}</span>
+
+    <!-- Use value for logic -->
+    <AdminPanel v-if="user.typeUser === 'ADMIN'" />
+  </div>
+</template>
+```
+
+### Custom Enum Labels
+
+Configure custom labels in `application.yml`:
+
+```yaml
+translate:
+  enum-labels:
+    UserRole:
+      ADMIN: Administrator
+      CLIENT: Customer
+      CONSEILLER: Advisor
+```
+
+Without config: `ADMIN` → `Admin` (auto-capitalized) → Translated
+With config: `ADMIN` → `Administrator` → Translated
+
+---
+
+## Field Metadata API (v1.0.2+)
+
+Get translated field labels for building dynamic forms and tables.
+
+### Enable Metadata for an Entity
+
+Add `@Translatable` annotation:
+
+```java
+import com.crm_bancaire.common.translate.annotation.Translatable;
+
+@Entity
+@Translatable(name = "User", description = "User management entity")
+public class User {
+    private String firstName;
+    private String lastName;
+    private String email;
+    private UserRole typeUser;
+}
+```
+
+### Get Field Labels
+
+**Request:**
+```bash
+GET /api/translate/metadata/User?lang=en
+```
+
+**Response:**
+```json
+{
+  "firstName": "First Name",
+  "lastName": "Last Name",
+  "email": "Email",
+  "telephone": "Telephone",
+  "typeUser": "Type User",
+  "isActive": "Is Active"
+}
+```
+
+**Request:**
+```bash
+GET /api/translate/metadata/User?lang=fr
+```
+
+**Response:**
+```json
+{
+  "firstName": "Prénom",
+  "lastName": "Nom",
+  "email": "Email",
+  "telephone": "Téléphone",
+  "typeUser": "Type Utilisateur",
+  "isActive": "Est Actif"
+}
+```
+
+### Frontend Usage Examples
+
+**Dynamic form labels (React):**
+```jsx
+import { useQuery } from 'react-query';
+
+function UserForm() {
+  const lang = useLanguage(); // 'en', 'fr', etc.
+  const { data: labels } = useQuery(
+    ['metadata', 'User', lang],
+    () => fetch(`/api/translate/metadata/User?lang=${lang}`).then(r => r.json())
+  );
+
+  return (
+    <Form>
+      <FormField>
+        <label>{labels.firstName}</label>
+        <input name="firstName" />
+      </FormField>
+
+      <FormField>
+        <label>{labels.email}</label>
+        <input name="email" type="email" />
+      </FormField>
+
+      <FormField>
+        <label>{labels.typeUser}</label>
+        <select name="typeUser">...</select>
+      </FormField>
+    </Form>
+  );
+}
+```
+
+**Dynamic table headers (Vue):**
+```vue
+<script setup>
+import { ref, onMounted } from 'vue';
+
+const labels = ref({});
+const lang = inject('language');
+
+onMounted(async () => {
+  const res = await fetch(`/api/translate/metadata/User?lang=${lang}`);
+  labels.value = await res.json();
+});
+</script>
+
+<template>
+  <table>
+    <thead>
+      <tr>
+        <th>{{ labels.firstName }}</th>
+        <th>{{ labels.email }}</th>
+        <th>{{ labels.typeUser }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="user in users" :key="user.id">
+        <td>{{ user.firstName }}</td>
+        <td>{{ user.email }}</td>
+        <td>{{ user.typeUserLabel }}</td>
+      </tr>
+    </tbody>
+  </table>
+</template>
+```
+
+### List All Available Entities
+
+```bash
+GET /api/translate/metadata/entities
+```
+
+**Response:**
+```json
+["User", "Account", "Module", "Product"]
+```
+
+### Metadata Health Check
+
+```bash
+GET /api/translate/metadata/health
+```
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "sourceLanguage": "fr",
+  "entitiesCount": 4,
+  "entities": ["User", "Account", "Module", "Product"]
+}
 ```
 
 ---
