@@ -14,7 +14,7 @@
 
     <groupId>com.crm-bancaire</groupId>
     <artifactId>common-translate</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.3</version>
     <name>common-translate</name>
     <description>Automatic translation module with LibreTranslate and Redis cache</description>
 
@@ -39,6 +39,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+
+        <!-- Caffeine for local caching with synchronization (prevents cache stampede) -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
         </dependency>
 
         <!-- Jackson for JSON processing -->

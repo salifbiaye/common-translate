@@ -5,6 +5,107 @@ All notable changes to the `common-translate` module will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2024-10-26
+
+### Fixed
+- 🐛 **Critical: Entity scanning fixed**: Now uses `ClassPathScanningCandidateComponentProvider` instead of `getBeansWithAnnotation`
+  - JPA entities are POJOs managed by Hibernate, not Spring beans
+  - Previously: `@Translatable` entities were not detected → metadata endpoint returned 404
+  - Now: Correctly scans classpath for `@Translatable` entities → metadata endpoint works ✅
+  - Logs: `✅ Registered translatable entity: User -> User`
+
+- 🐛 **Metadata endpoint now uses `Accept-Language` header**: No more `?lang=` query parameter
+  - **Before**: `GET /api/translate/metadata/User?lang=en`
+  - **After**: `GET /api/translate/metadata/User` + `Accept-Language: en` header
+  - Consistent with other translation endpoints
+
+- 🐛 **Field names translation fixed**: Now correctly detects that field names are in English
+  - **Problem**: Source language = FR, but field names = `firstName`, `lastName` (English!)
+  - **Before**: `firstName` → "First Name" → translated FR to FR → stayed "First Name" ❌
+  - **After**: `firstName` → "First Name" → translated EN to FR → "Prénom" ✅
+  - Field metadata and enum auto-labels now translate from **EN** regardless of source language
+
+- 🐛 **Enum labels always generated**: Now generated even for source language
+  - **Problem**: With Accept-Language: FR (source), no `typeUserLabel` was added
+  - **Reason**: Field names are in English, but source content is in French
+  - **Now**: Enum labels **always** generated, even when `targetLang == sourceLanguage`
+  - Example FR: `{"typeUser": "CLIENT", "typeUserLabel": "Client"}` ✅
+
+- 🐛 **Custom enum labels now work correctly**: Fixed translation from configured source language
+  - **Config**: `ADMIN: Administrateur système` (FR)
+  - **Before**: Used auto-generated "Admin" instead of custom label
+  - **After**: Uses "Administrateur système" → translates to "System administrator" (EN) ✅
+  - Added detailed debug logs to trace enum label generation
+
+- 🐛 **@NoTranslate no longer excludes from metadata**: Only prevents VALUE translation, not LABEL translation
+  - **Problem**: Fields with `@NoTranslate` were excluded from metadata entirely
+  - **User need**: Translated labels for forms even if values aren't translated
+  - **Example**: Label "Prénom" (translated) for value "Salif" (not translated)
+  - **Before**: `firstName` with `@NoTranslate` → not in metadata ❌
+  - **After**: `firstName` with `@NoTranslate` → metadata has "First Name" → "Prénom" ✅
+  - **Note**: Only `EXCLUDED_FIELDS` (id, email, etc.) are excluded from metadata
+
+### Added
+- ✨ **`field-names-language` configuration parameter**: Control the language of field names independently
+  ```yaml
+  translate:
+    source-language: fr            # Language of business content (messages, descriptions)
+    field-names-language: en       # Language of variable names (default: en)
+  ```
+  - **Use case**: Most Java projects use English variable names (`firstName`, `lastName`)
+  - **Flexibility**: If you use French variables (`prenom`, `nom`), set `field-names-language: fr`
+  - **Default**: `en` (since 99% of Java projects follow English naming conventions)
+  - **Impact**: Used for:
+    - Field metadata translation (`firstName` → "First Name" → "Prénom")
+    - Auto-generated enum labels (`ADMIN` → "Admin" → "Administrateur")
+
+### Changed
+- **Translation cache keys** now include source language: `trans:{source}:{target}:{hash}`
+  - Supports multi-source translation (EN field names + FR content)
+  - Each source-target pair is cached separately
+
+- **`translate()` method** now accepts optional `sourceLangOverride` parameter
+  - Allows explicit source language specification
+  - Used internally for field names (configured language) vs content (source language)
+
+- **Initialization logs** now show configuration:
+  ```
+  ✅ AutoTranslationService initialized:
+     📝 Source language: fr
+     🏷️  Field names language: en
+     📦 Translatable entities: 3
+     ⏰ Cache TTL: 86400s
+  ```
+
+### Enhanced Logging
+- **INFO level logs** for enum label generation and LibreTranslate calls (easier debugging):
+  - `🔍 Getting enum label: class=User, field=typeUser, enumValue=ADMIN, enumClassName=UserRole, targetLang=en`
+  - `✅ Using custom label: UserRole.ADMIN → 'Administrateur système' (from config)`
+  - `🌐 Calling LibreTranslate: 'Administrateur système' (fr → en)`
+  - `✅ LibreTranslate result: 'Administrateur système' (fr → en) = 'System administrator'`
+  - `✅ Custom label translated: 'Administrateur système' (fr → en) = 'System administrator'`
+  - `🔄 Auto-generated label: LEVEL_1 → 'Level 1'`
+  - `🌐 Calling LibreTranslate: 'Level 1' (en → fr)`
+  - `✅ Auto label translated: 'Level 1' (en → fr) = 'Niveau 1'`
+  - `📋 Field metadata: firstName → 'First Name' (en) → 'Prénom' (fr)`
+
+- **Error logs** when LibreTranslate fails:
+  - `❌ LibreTranslate failed for 'First Name' (en → fr): Connection refused`
+  - `   Check if LibreTranslate is running at: http://localhost:5000`
+
+### Technical Details
+- **Entity scanning**: `ClassPathScanningCandidateComponentProvider` scans classpath for `@Translatable`
+- **Base package detection**: Finds `@SpringBootApplication` class to determine scan package
+- **Field name language**: Configurable via `field-names-language` (default: `en`)
+- **Content language**: Uses configured `translate.source-language` for actual content
+- **Enum label logic**:
+  1. Check custom config → translate from source language
+  2. Fallback to auto-capitalization → translate from field-names-language
+  3. Always add `{fieldName}Label` field, even for source language
+- **List/Page translation**: Now detects actual element class from first non-null item
+  - **Before**: Used `Object.class` → couldn't find enum fields → custom config ignored
+  - **After**: Uses real class (e.g., `User.class`) → enum fields found → custom config works ✅
+
 ## [1.0.2] - 2024-10-26
 
 ### Fixed

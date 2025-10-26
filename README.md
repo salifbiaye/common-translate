@@ -1,18 +1,32 @@
-# common-translate
+# common-translate v1.0.3
 
-Automatic translation module for Spring Boot microservices using LibreTranslate and Redis cache.
+**Module de traduction automatique pour microservices Spring Boot**
 
-## Features
+Module réutilisable qui ajoute la traduction automatique des réponses API HTTP avec LibreTranslate. Transforme automatiquement vos APIs REST en APIs multilingues sans modifier le code des contrôleurs.
 
-- 🌍 **Automatic translation** of REST API responses based on `Accept-Language` header
-- ⚡ **High performance** with Redis caching (24h TTL)
-- 🎯 **Zero code changes** in controllers - just add an annotation
-- 🏷️ **Automatic enum label generation** - adds translated labels for enum values
-- 🗂️ **Field metadata endpoint** - get translated field labels for frontend forms
-- 🔒 **Smart exclusions** - names, emails, UUIDs, dates automatically excluded
-- 🌐 **Multi-language support** - fr, en, es, de, it, pt
-- 📦 **Configurable source language** - works for any project language
-- 🔧 **Custom enum mappings** - optional YAML configuration for precise labels
+## 🌟 Fonctionnalités
+
+### Traduction Automatique
+- ✅ **Interception HTTP transparente** - Traduit automatiquement les réponses API
+- ✅ **Détection de langue** - Via header `Accept-Language` (en, fr, es, de, it, pt)
+- ✅ **Support complet** - Objets simples, listes, pages paginées
+- ✅ **Annotations intelligentes** - `@NoTranslate` pour exclure des champs
+
+### Labels d'Énumérations
+- ✅ **Génération automatique** - `ADMIN` → `adminLabel: "Admin"`
+- ✅ **Configuration personnalisée** - Labels custom via YAML
+- ✅ **Multilingue** - Labels traduits selon `Accept-Language`
+
+### Métadonnées de Formulaires
+- ✅ **API de métadonnées** - Génère les labels de champs traduits
+- ✅ **Détection automatique** - Scan des entités `@Translatable`
+- ✅ **Chemins configurables** - `/api/users/translate/metadata` par service
+
+### Performance Optimisée (✨ NOUVEAU v1.0.3)
+- ✅ **Cache à deux niveaux** - L1 (Caffeine local) + L2 (Redis distribué)
+- ✅ **Protection anti-stampede** - Synchronisation automatique des requêtes concurrentes
+- ✅ **1 seul appel API** - Même si 10+ requêtes arrivent en même temps
+- ✅ **@NoTranslate amélioré** - Empêche la traduction des VALEURS mais génère quand même les labels
 
 ## Quick Start
 
@@ -22,37 +36,42 @@ Automatic translation module for Spring Boot microservices using LibreTranslate 
 <dependency>
     <groupId>com.crm-bancaire</groupId>
     <artifactId>common-translate</artifactId>
-    <version>1.0.2</version>
+    <version>1.0.3</version>
 </dependency>
 ```
 
-### 2. Enable Translation
-
-Add `@EnableAutoTranslate` to your Spring Boot application:
+### 2. Activer le Module
 
 ```java
 @SpringBootApplication
-@EnableAutoTranslate
-public class YourServiceApplication {
+@EnableAutoTranslate(basePackages = "com.mycompany.myservice")
+public class MyServiceApplication {
     public static void main(String[] args) {
-        SpringApplication.run(YourServiceApplication.class, args);
+        SpringApplication.run(MyServiceApplication.class, args);
     }
 }
 ```
 
-### 3. Configure
-
-Add to your `application.yml`:
+### 3. Configuration
 
 ```yaml
 translate:
   enabled: true
-  source-language: fr  # Language of your source code
+  source-language: fr              # Langue du contenu métier
+  field-names-language: en         # Langue des noms de variables (firstName, lastName)
+  metadata:
+    base-path: /api/users          # Chemin de base pour métadonnées
   libretranslate:
-    url: http://libretranslate:5000
+    url: http://localhost:5000
+  cache:
+    ttl: 86400                     # 24h en secondes
+  enum-labels:
+    UserRole:
+      ADMIN: Administrateur système
+      USER: Utilisateur standard
 ```
 
-**That's it!** Your REST API responses will be automatically translated based on the `Accept-Language` header.
+**C'est tout!** Vos réponses API seront automatiquement traduites selon le header `Accept-Language`.
 
 ## How It Works
 
@@ -156,6 +175,7 @@ The following are **automatically excluded** from translation:
 translate:
   enabled: true                       # Enable/disable translation (default: true)
   source-language: fr                 # Source code language (fr, en, es, de, it, pt)
+  field-names-language: en            # Language of field names (default: en)
   cache:
     ttl: 86400                        # Cache TTL in seconds (default: 24h)
   libretranslate:
@@ -170,7 +190,12 @@ translate:
       LEVEL_2: Niveau Deux
 ```
 
-**⚠️ IMPORTANT:** Custom enum labels must be in your **SOURCE language** (defined by `source-language`). They will be automatically translated to target languages by LibreTranslate.
+**⚠️ IMPORTANT:**
+- **`source-language`**: Language of your business content (messages, descriptions, etc.)
+- **`field-names-language`**: Language of your variable names (default: `en`)
+  - Most Java projects use English variable names: `firstName`, `lastName`, `typeUser`
+  - If you use French variables: `prenom`, `nom`, `typeUtilisateur` → set to `fr`
+- **Custom enum labels** must be in your **SOURCE language** (defined by `source-language`). They will be automatically translated to target languages by LibreTranslate.
 
 ## Enum Label Generation
 
@@ -236,55 +261,95 @@ With custom mapping:
 
 Get translated field labels for building multilingual forms and UIs.
 
-### Mark Entities for Metadata
-
-Add `@Translatable` annotation to your entity classes:
+### 1. Annoter vos Entités
 
 ```java
 @Entity
-@Translatable(name = "User")
+@Translatable(name = "User", description = "Entité utilisateur")
 @Data
 public class User {
+    @NoTranslate
     private String id;
-    private String firstName;
+
+    @NoTranslate
+    private String firstName;      // Valeur non traduite
+
+    @NoTranslate
     private String lastName;
-    private String email;
-    private String telephone;
+
+    @Enumerated(EnumType.STRING)
+    private UserRole typeUser;     // Génère typeUserLabel
+}
+```
+
+### 2. Annoter vos DTOs
+
+```java
+@Data
+public class UserResponse {
+    @NoTranslate
+    private String firstName;      // IMPORTANT: Annoter le DTO aussi!
+
+    @NoTranslate
+    private String lastName;
+
     private UserRole typeUser;
 }
 ```
 
-### Get Field Labels
+### 3. Configurer le Chemin des Métadonnées
 
-**Request:**
-```bash
-GET /api/translate/metadata/User?lang=en
+```yaml
+# user-service
+translate:
+  metadata:
+    base-path: /api/users
+# → Endpoint: /api/users/translate/metadata/User
+
+# customer-service
+translate:
+  metadata:
+    base-path: /api/customers
+# → Endpoint: /api/customers/translate/metadata/Customer
 ```
 
-**Response:**
+### 4. Utiliser l'API de Métadonnées
+
+**Requête avec header Accept-Language:**
+```bash
+curl -H "Accept-Language: fr" \
+  http://localhost:8089/api/users/translate/metadata/User
+```
+
+**Réponse (français):**
+```json
+{
+  "firstName": "Prénom",
+  "lastName": "Nom",
+  "email": "Email",
+  "telephone": "Téléphone",
+  "typeUser": "Rôle"
+}
+```
+
+**Requête en anglais:**
+```bash
+curl -H "Accept-Language: en" \
+  http://localhost:8089/api/users/translate/metadata/User
+```
+
+**Réponse (anglais):**
 ```json
 {
   "firstName": "First Name",
   "lastName": "Last Name",
+  "email": "Email",
   "telephone": "Telephone",
   "typeUser": "Type User"
 }
 ```
 
-**Request:**
-```bash
-GET /api/translate/metadata/User?lang=fr
-```
-
-**Response:**
-```json
-{
-  "firstName": "Prénom",
-  "lastName": "Nom",
-  "telephone": "Téléphone",
-  "typeUser": "Type Utilisateur"
-}
-```
+**⚠️ IMPORTANT:** Depuis v1.0.3, utilisez `Accept-Language` header au lieu de `?lang=` query parameter!
 
 ### Use Cases
 
@@ -343,42 +408,117 @@ Each request is independent with its own cache key:
 - `trans:es:CLIENT` → "Cliente"
 - `trans:de:CLIENT` → "Kunde"
 
-## Performance & Caching
+## 🏗️ Architecture du Cache à Deux Niveaux (v1.0.3)
 
-### How Caching Works
+### Stratégie de Cache
 
-**First translation (cache MISS):**
 ```
-Request: typeUser="ADMIN" with Accept-Language: en
-→ Auto-generate: "Admin" (or custom: "Administrateur système")
-→ Check Redis cache: "trans:en:Admin" → NOT FOUND
-→ Call LibreTranslate API (~100-300ms)
-→ Store in Redis: "trans:en:Admin" = "Administrator"
-→ Return: "Administrator"
+Requête HTTP → L1 (Caffeine local) → L2 (Redis distribué) → LibreTranslate
+               ↑ 30min, 10K entrées  ↑ 24h, distribué         ↑ API externe
 ```
 
-**Subsequent translations (cache HIT):**
+**L1 - Cache Local (Caffeine):**
+- In-memory, ultra-rapide (< 1ms)
+- Max 10,000 entrées
+- Expire après 30 minutes
+- **Synchronisation automatique des threads**
+
+**L2 - Cache Distribué (Redis):**
+- Partagé entre toutes les instances du service
+- Expire après 24 heures (configurable)
+- Persistant entre redémarrages
+
+### 🛡️ Protection Anti-Stampede
+
+**Problème:** Sans synchronisation, si 10 requêtes concurrentes arrivent pour un texte non en cache:
 ```
-Request: typeUser="ADMIN" with Accept-Language: en
-→ Auto-generate: "Admin"
-→ Check Redis cache: "trans:en:Admin" → FOUND!
-→ Return from cache (~1-2ms) ✅ NO LibreTranslate call
+Thread 1: Check cache → MISS → Call LibreTranslate
+Thread 2: Check cache → MISS → Call LibreTranslate  ❌
+Thread 3: Check cache → MISS → Call LibreTranslate  ❌
+...
+Thread 10: Check cache → MISS → Call LibreTranslate ❌
+Résultat: 10 appels API pour le même texte! 😱
 ```
 
-### Performance Metrics
+**Solution (v1.0.3):** Caffeine synchronise automatiquement les requêtes concurrentes:
+```
+Thread 1:
+  Check L1 → MISS → Acquire LOCK → Check L2 → MISS → Call LibreTranslate (200ms)
+  → Store in L2 (Redis) → Store in L1 → Release LOCK → Return "Administrator"
 
-**First request (cache miss):**
-- Business cache hit: 5ms
-- Translation (LibreTranslate API): 100-300ms
-- Redis cache save: 1ms
-- **Total: ~310ms**
+Thread 2-100:
+  Check L1 → MISS → Try LOCK → WAIT (Thread 1 has it) ⏳
+  → Thread 1 finishes → Get value directly from L1 → Return "Administrator" ✅
 
-**Subsequent requests (cache hit):**
-- Business cache hit: 5ms
-- Translation (Redis cache): 1-2ms
-- **Total: ~7-10ms** 🚀
+Résultat:
+- 1 seul appel LibreTranslate ✅
+- 0 appel Redis pour threads 2-100 (ils attendent Thread 1) ✅
+- Temps total: ~200ms pour tous ✅
+```
 
-**Cache hit rate in production:** >99% for stable content
+### Comment ça marche
+
+**Scénario réel: 100 requêtes arrivent en même temps (cache vide)**
+
+```
+Request: "Administrator" (fr → en) - 100 requêtes simultanées
+
+⏱️ T=0ms: 100 requêtes arrivent
+
+Thread 1:
+  T=0ms:   Check L1 (Caffeine): MISS
+  T=1ms:   Acquire LOCK (les 99 autres attendent ici!)
+  T=2ms:   Check L2 (Redis): MISS
+  T=3ms:   Call LibreTranslate API...
+  T=203ms: Receive response: "Administrateur"
+  T=204ms: Store in L2 (Redis)
+  T=205ms: Store in L1 (Caffeine) & Release LOCK
+
+Threads 2-100:
+  T=0-1ms:   Check L1: MISS → Try LOCK → BLOCKED (waiting...)
+  T=205ms:   Thread 1 releases LOCK
+  T=205ms:   Get value from L1 (Caffeine): "Administrateur" ✅
+  T=205ms:   Return immediately
+
+Résultat:
+✅ 1 seul appel LibreTranslate (Thread 1)
+✅ 0 appel Redis pour Threads 2-100 (synchronisation Caffeine)
+✅ Tous les 100 threads reçoivent la réponse en ~205ms
+✅ Économie: 99 appels API évités!
+```
+
+**Requêtes suivantes (L1 cache chaud):**
+```
+Request: "Administrator" (fr → en)
+  T=0ms: Check L1 (Caffeine): HIT!
+  T=0.5ms: Return "Administrateur" ✅
+
+Aucun appel Redis, aucun appel LibreTranslate!
+```
+
+### 📊 Performance Metrics
+
+**Scénario: 100 requêtes concurrentes (première fois)**
+
+| Thread | L1 Cache | L2 Cache | LibreTranslate | Temps Total |
+|--------|----------|----------|----------------|-------------|
+| Thread 1 | MISS | MISS | ✅ Call (~200ms) | ~205ms |
+| Thread 2-100 | WAIT → HIT | - | ❌ Skip | ~205ms (waiting) |
+
+**Après la première vague:**
+- L1 cache contient la valeur
+- L2 cache (Redis) contient la valeur
+- Toutes les requêtes suivantes: < 1ms (L1 hit)
+
+**Comparaison avec v1.0.2 (sans Caffeine):**
+
+| Scénario | v1.0.2 | v1.0.3 | Amélioration |
+|----------|--------|--------|--------------|
+| 100 requêtes concurrentes (cache vide) | 100 appels LibreTranslate | 1 appel | **99% moins d'appels** |
+| Requête unique (L1 miss, L2 hit) | 1-2ms (Redis) | 1-2ms (Redis) | Identique |
+| Requête unique (L1 hit) | - | < 1ms | ⚡ **Plus rapide** |
+
+**Taux de cache hit en production:** > 99%
 
 ### Cache Configuration
 

@@ -9,11 +9,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
+import org.springframework.core.type.filter.AnnotationTypeFilter;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -24,7 +30,14 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Service for automatic translation of text and objects using LibreTranslate.
- * Uses Redis cache to avoid repeated translations and improve performance.
+ * Uses two-level caching strategy:
+ * - L1 Cache (Caffeine): Fast in-memory cache with automatic synchronization (prevents cache stampede)
+ * - L2 Cache (Redis): Distributed cache shared across service instances
+ *
+ * Concurrent Request Handling:
+ * When multiple threads request the same uncached translation simultaneously,
+ * Caffeine ensures only ONE thread calls LibreTranslate while others wait.
+ * This prevents the "thundering herd" problem.
  */
 @Service
 @RequiredArgsConstructor
@@ -35,6 +48,17 @@ public class AutoTranslationService {
     private final EnumLabelConfig enumLabelConfig;
     private final ApplicationContext applicationContext;
     private ObjectMapper objectMapper;
+
+    /**
+     * L1 cache (Caffeine): Local in-memory cache with automatic synchronization.
+     * Prevents cache stampede - only one thread loads a value for concurrent requests.
+     * Max 10,000 entries, expires after 30 minutes.
+     */
+    private final Cache<String, String> localCache = Caffeine.newBuilder()
+            .maximumSize(10_000)
+            .expireAfterWrite(30, TimeUnit.MINUTES)
+            .recordStats()
+            .build();
 
     /**
      * Map of entity names to their Class objects for metadata generation
@@ -51,39 +75,89 @@ public class AutoTranslationService {
         // Scan for @Translatable entities
         scanTranslatableEntities();
 
-        log.info("AutoTranslationService initialized with Java 8 date/time support and {} translatable entities",
-                translatableEntities.size());
+        log.info("✅ AutoTranslationService initialized:");
+        log.info("   📝 Source language: {}", sourceLanguage);
+        log.info("   🏷️  Field names language: {}", fieldNamesLanguage);
+        log.info("   📦 Translatable entities: {}", translatableEntities.size());
+        log.info("   ⏰ Cache TTL: {}s", cacheTtl);
     }
 
     /**
-     * Scans the application context for classes annotated with @Translatable.
+     * Scans the classpath for classes annotated with @Translatable.
      * These entities will be available for metadata generation.
      */
     private void scanTranslatableEntities() {
         try {
-            Map<String, Object> beansWithAnnotation = applicationContext.getBeansWithAnnotation(jakarta.persistence.Entity.class);
+            // Find base package from @SpringBootApplication
+            String basePackage = findBasePackage();
+            if (basePackage == null) {
+                log.warn("Could not find @SpringBootApplication class, skipping entity scan");
+                return;
+            }
 
-            for (Object bean : beansWithAnnotation.values()) {
-                Class<?> beanClass = bean.getClass();
-                // Handle proxy classes
-                if (beanClass.getName().contains("$$")) {
-                    beanClass = beanClass.getSuperclass();
-                }
+            log.debug("Scanning for @Translatable entities in package: {}", basePackage);
 
-                Translatable annotation = beanClass.getAnnotation(Translatable.class);
-                if (annotation != null) {
-                    String entityName = annotation.name();
-                    translatableEntities.put(entityName, beanClass);
-                    log.info("Registered translatable entity: {} -> {}", entityName, beanClass.getSimpleName());
+            // Create scanner that looks for @Translatable annotation
+            ClassPathScanningCandidateComponentProvider scanner =
+                new ClassPathScanningCandidateComponentProvider(false);
+            scanner.addIncludeFilter(new AnnotationTypeFilter(Translatable.class));
+
+            // Scan for candidate classes
+            Set<BeanDefinition> candidateComponents = scanner.findCandidateComponents(basePackage);
+
+            for (BeanDefinition bd : candidateComponents) {
+                try {
+                    // Load the class
+                    Class<?> clazz = Class.forName(bd.getBeanClassName());
+
+                    // Get @Translatable annotation
+                    Translatable annotation = clazz.getAnnotation(Translatable.class);
+                    if (annotation != null) {
+                        String entityName = annotation.name();
+                        translatableEntities.put(entityName, clazz);
+                        log.info("✅ Registered translatable entity: {} -> {}", entityName, clazz.getSimpleName());
+                    }
+                } catch (ClassNotFoundException e) {
+                    log.warn("Could not load class: {}", bd.getBeanClassName());
                 }
             }
+
+            log.info("Entity scan complete. Found {} translatable entities", translatableEntities.size());
+
         } catch (Exception e) {
-            log.warn("Failed to scan for @Translatable entities: {}", e.getMessage());
+            log.warn("Failed to scan for @Translatable entities: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * Finds the base package of the application by locating @SpringBootApplication class
+     */
+    private String findBasePackage() {
+        try {
+            Map<String, Object> springBootApps = applicationContext.getBeansWithAnnotation(SpringBootApplication.class);
+            if (!springBootApps.isEmpty()) {
+                Object app = springBootApps.values().iterator().next();
+                String packageName = app.getClass().getPackage().getName();
+
+                // Handle proxy classes (Spring may wrap the main class)
+                if (packageName.contains("$$EnhancerBySpringCGLIB")) {
+                    packageName = app.getClass().getSuperclass().getPackage().getName();
+                }
+
+                log.debug("Found base package: {}", packageName);
+                return packageName;
+            }
+        } catch (Exception e) {
+            log.warn("Error finding base package: {}", e.getMessage());
+        }
+        return null;
     }
 
     @Value("${translate.source-language:fr}")
     private String sourceLanguage;
+
+    @Value("${translate.field-names-language:en}")
+    private String fieldNamesLanguage; // Language used for field names (default: en)
 
     @Value("${translate.libretranslate.url}")
     private String translateUrl;
@@ -92,95 +166,137 @@ public class AutoTranslationService {
     private long cacheTtl; // Default 24 hours
 
     /**
-     * Fields that should never be translated (common names)
+     * Technical fields that should be excluded from metadata generation.
+     * These are internal/system fields that don't need labels in forms.
+     *
+     * NOTE: User data fields like firstName, lastName, email, telephone
+     * are NOT in this list because we need their LABELS for forms,
+     * even if their VALUES shouldn't be translated (via @NoTranslate).
      */
     private static final Set<String> EXCLUDED_FIELDS = Set.of(
-            "id", "uuid", "email", "username", "password", "token",
-            "firstName", "lastName", "fullName", "keycloakId",
+            "id", "uuid", "password", "token", "keycloakId",
             "createdAt", "updatedAt", "dateCreation", "dateModification",
-            "telephone", "phone", "url", "uri", "sub", "iss"
+            "url", "uri", "sub", "iss"
     );
 
     /**
      * Translates a single text from source language to target language.
      * Uses Redis cache for performance.
      *
+     * Special handling: If source language is FR but text appears to be EN,
+     * translate from EN instead (for field names like "firstName" → "First Name").
+     *
      * @param text       Text to translate
      * @param targetLang Target language code (en, es, de, it, pt)
      * @return Translated text or original if translation fails
      */
     public String translate(String text, String targetLang) {
-        // No translation needed if target language is same as source
-        if (sourceLanguage.equals(targetLang) || text == null || text.trim().isEmpty()) {
+        return translate(text, null, targetLang);
+    }
+
+    /**
+     * Translates text with explicit source language override.
+     *
+     * @param text       Text to translate
+     * @param sourceLangOverride Override source language (null = use configured source)
+     * @param targetLang Target language code
+     * @return Translated text
+     */
+    public String translate(String text, String sourceLangOverride, String targetLang) {
+        if (text == null || text.trim().isEmpty()) {
+            return text;
+        }
+
+        // Determine actual source language
+        String actualSource = sourceLangOverride != null ? sourceLangOverride : sourceLanguage;
+
+        // No translation needed if target is same as actual source
+        if (actualSource.equals(targetLang)) {
+            log.info("⏭️  Skipping translation (same language): '{}' ({} → {})", text, actualSource, targetLang);
             return text;
         }
 
         // Don't translate non-translatable content
         if (isNonTranslatable(text)) {
-            log.debug("Skipping non-translatable text: {}", text);
+            log.debug("⏭️  Skipping non-translatable text: {}", text);
             return text;
         }
 
-        // Check Redis cache first
-        String cacheKey = buildCacheKey(targetLang, text);
-        String cached = redisTemplate.opsForValue().get(cacheKey);
-        if (cached != null) {
-            log.debug("Cache HIT for: {} -> {}", text, cached);
-            return cached;
-        }
+        // Build cache key (include source in cache key for multi-source support)
+        String cacheKey = buildCacheKey(actualSource, targetLang, text);
 
-        // Call LibreTranslate API
-        try {
-            log.debug("Translating '{}' from {} to {}", text, sourceLanguage, targetLang);
+        // Two-level cache strategy with automatic synchronization for concurrent requests
+        // This ensures only ONE thread calls LibreTranslate when 10+ requests arrive simultaneously
+        return localCache.get(cacheKey, k -> {
+            // This loading function is called ONLY if L1 cache misses
+            // Caffeine automatically synchronizes concurrent requests for the same key
 
-            Map<String, String> request = Map.of(
-                    "q", text,
-                    "source", sourceLanguage,
-                    "target", targetLang,
-                    "format", "text"
-            );
-
-            @SuppressWarnings("unchecked")
-            Map<String, String> response = restTemplate.postForObject(
-                    translateUrl + "/translate",
-                    request,
-                    Map.class
-            );
-
-            if (response != null && response.containsKey("translatedText")) {
-                String translated = response.get("translatedText");
-
-                // Cache the result
-                redisTemplate.opsForValue().set(cacheKey, translated, cacheTtl, TimeUnit.SECONDS);
-
-                log.debug("Translated '{}' -> '{}'", text, translated);
-                return translated;
+            // Check L2 cache (Redis) - distributed cache across service instances
+            String redisResult = redisTemplate.opsForValue().get(cacheKey);
+            if (redisResult != null) {
+                log.trace("📦 L2 Cache HIT (Redis): {} ({} → {}) = {}", text, actualSource, targetLang, redisResult);
+                return redisResult;
             }
 
-            log.warn("Translation response missing 'translatedText' field");
-            return text;
+            // Both caches missed - call LibreTranslate API
+            // Only ONE thread reaches this point for concurrent requests
+            log.info("🌐 Calling LibreTranslate (L1+L2 cache MISS): '{}' ({} → {})", text, actualSource, targetLang);
 
-        } catch (Exception e) {
-            log.error("Translation failed for '{}': {}", text, e.getMessage());
-            return text; // Fallback to original text
-        }
+            try {
+                Map<String, String> request = Map.of(
+                        "q", text,
+                        "source", actualSource,
+                        "target", targetLang,
+                        "format", "text"
+                );
+
+                @SuppressWarnings("unchecked")
+                Map<String, String> response = restTemplate.postForObject(
+                        translateUrl + "/translate",
+                        request,
+                        Map.class
+                );
+
+                if (response != null && response.containsKey("translatedText")) {
+                    String translated = response.get("translatedText");
+
+                    // Store in L2 cache (Redis) for other service instances
+                    redisTemplate.opsForValue().set(cacheKey, translated, cacheTtl, TimeUnit.SECONDS);
+
+                    log.info("✅ LibreTranslate result: '{}' ({} → {}) = '{}'", text, actualSource, targetLang, translated);
+                    return translated;
+                }
+
+                log.warn("⚠️ Translation response missing 'translatedText' field");
+                return text;
+
+            } catch (Exception e) {
+                log.error("❌ LibreTranslate failed for '{}' ({} → {}): {}", text, actualSource, targetLang, e.getMessage());
+                log.error("   Check if LibreTranslate is running at: {}", translateUrl);
+                return text; // Fallback to original text
+            }
+        });
     }
 
     /**
      * Translates an object to JsonNode WITHOUT round-trip conversion.
      * Returns JsonNode to avoid enum/date deserialization issues.
      *
+     * IMPORTANT: Enum labels are ALWAYS generated, even when targetLang == sourceLanguage,
+     * because field names are in English but source content is in another language.
+     *
      * @param obj        Object to translate
      * @param targetLang Target language code
      * @return JsonNode with translated string fields
      */
     public JsonNode translateToJsonNode(Object obj, String targetLang) {
-        if (sourceLanguage.equals(targetLang) || obj == null) {
+        if (obj == null) {
             return objectMapper.valueToTree(obj);
         }
 
         try {
             JsonNode node = objectMapper.valueToTree(obj);
+            // ALWAYS process nodes to generate enum labels, even for source language
             translateNode(node, targetLang, obj.getClass());
             return node; // Return JsonNode directly, no round-trip!
         } catch (Exception e) {
@@ -191,21 +307,31 @@ public class AutoTranslationService {
 
     /**
      * Translates a List of objects to JsonNode array.
+     * Enum labels are always generated, even for source language.
      *
      * @param list       List to translate
      * @param targetLang Target language code
      * @return JsonNode array with translated elements
      */
     public JsonNode translateList(List<?> list, String targetLang) {
-        if (sourceLanguage.equals(targetLang) || list == null || list.isEmpty()) {
+        if (list == null || list.isEmpty()) {
             return objectMapper.valueToTree(list);
         }
 
         try {
+            // Detect actual element class from first non-null element
+            Class<?> elementClass = Object.class;
+            for (Object item : list) {
+                if (item != null) {
+                    elementClass = item.getClass();
+                    break;
+                }
+            }
+
             JsonNode arrayNode = objectMapper.valueToTree(list);
             if (arrayNode.isArray()) {
                 for (JsonNode item : arrayNode) {
-                    translateNode(item, targetLang, Object.class);
+                    translateNode(item, targetLang, elementClass);
                 }
             }
             return arrayNode;
@@ -217,24 +343,34 @@ public class AutoTranslationService {
 
     /**
      * Translates a Page of objects to JsonNode with pagination metadata.
+     * Enum labels are always generated, even for source language.
      *
      * @param page       Page to translate
      * @param targetLang Target language code
      * @return JsonNode with translated content and preserved pagination
      */
     public JsonNode translatePage(org.springframework.data.domain.Page<?> page, String targetLang) {
-        if (sourceLanguage.equals(targetLang) || page == null) {
+        if (page == null) {
             return objectMapper.valueToTree(page);
         }
 
         try {
+            // Detect actual element class from first non-null element
+            Class<?> elementClass = Object.class;
+            for (Object item : page.getContent()) {
+                if (item != null) {
+                    elementClass = item.getClass();
+                    break;
+                }
+            }
+
             JsonNode pageNode = objectMapper.valueToTree(page);
 
             // Translate only the 'content' array, preserve pagination metadata
             JsonNode contentNode = pageNode.get("content");
             if (contentNode != null && contentNode.isArray()) {
                 for (JsonNode item : contentNode) {
-                    translateNode(item, targetLang, Object.class);
+                    translateNode(item, targetLang, elementClass);
                 }
             }
 
@@ -250,6 +386,9 @@ public class AutoTranslationService {
      * Also adds automatic enum label fields for detected enum values.
      */
     private void translateNode(JsonNode node, String targetLang, Class<?> clazz) {
+        log.info("🔄 Processing node for translation: class={}, targetLang={}, sourceLanguage={}",
+                 clazz.getSimpleName(), targetLang, sourceLanguage);
+
         if (node.isObject()) {
             ObjectNode objectNode = (ObjectNode) node;
 
@@ -266,17 +405,14 @@ public class AutoTranslationService {
                     continue;
                 }
 
-                // Skip excluded fields
+                // Skip excluded fields (technical fields)
                 if (EXCLUDED_FIELDS.contains(fieldName)) {
                     log.trace("Skipping excluded field: {}", fieldName);
                     continue;
                 }
 
-                // Check @NoTranslate annotation
-                if (hasNoTranslateAnnotation(clazz, fieldName)) {
-                    log.trace("Skipping @NoTranslate field: {}", fieldName);
-                    continue;
-                }
+                // Check if field has @NoTranslate annotation
+                boolean hasNoTranslate = hasNoTranslateAnnotation(clazz, fieldName);
 
                 // Handle text fields
                 if (value.isTextual()) {
@@ -284,15 +420,21 @@ public class AutoTranslationService {
 
                     // Check if it's an enum-like value
                     if (looksLikeEnum(text)) {
-                        // Add a translated label field for the enum
+                        log.info("🎯 Detected enum field: {}={} (looks like enum)", fieldName, text);
+                        // ALWAYS add enum label, even for @NoTranslate fields
+                        // (Labels are for UI display, @NoTranslate only affects VALUES)
                         String enumLabel = getEnumLabel(clazz, fieldName, text, targetLang);
                         objectNode.put(fieldName + "Label", enumLabel);
-                        log.trace("Added enum label: {} -> {}", text, enumLabel);
+                        log.info("✅ Added enum label: {}={} → {}Label={}", fieldName, text, fieldName, enumLabel);
                     }
-                    // Translate regular text fields
-                    else if (!isNonTranslatable(text)) {
+                    // Translate regular text fields ONLY if NOT marked with @NoTranslate
+                    else if (!hasNoTranslate && !sourceLanguage.equals(targetLang) && !isNonTranslatable(text)) {
+                        log.info("📝 Translating text field: {}='{}'", fieldName, text);
                         String translated = translate(text, targetLang);
                         objectNode.put(fieldName, translated);
+                    } else {
+                        log.debug("⏭️  Skipping translation for field {}: hasNoTranslate={}, sourceLanguage={}, targetLang={}, nonTranslatable={}",
+                                  fieldName, hasNoTranslate, sourceLanguage, targetLang, isNonTranslatable(text));
                     }
                 }
                 // Recursively handle nested objects and arrays
@@ -319,20 +461,36 @@ public class AutoTranslationService {
         // Try to get field type to determine enum class name
         String enumClassName = getEnumClassName(clazz, fieldName);
 
+        log.info("🔍 Getting enum label: class={}, field={}, enumValue={}, enumClassName={}, targetLang={}",
+                  clazz.getSimpleName(), fieldName, enumValue, enumClassName, targetLang);
+
         // Check for custom mapping first
         if (enumClassName != null) {
             String customLabel = enumLabelConfig.getCustomLabel(enumClassName, enumValue);
             if (customLabel != null) {
-                // Translate the custom label
-                return translate(customLabel, targetLang);
+                log.info("✅ Using custom label: {}.{} → '{}' (from config)", enumClassName, enumValue, customLabel);
+                // Translate the custom label from SOURCE language to target
+                String translated = translate(customLabel, sourceLanguage, targetLang);
+                log.info("✅ Custom label translated: '{}' ({} → {}) = '{}'",
+                         customLabel, sourceLanguage, targetLang, translated);
+                return translated;
+            } else {
+                log.info("ℹ️ No custom label found for {}.{}, using auto-generation", enumClassName, enumValue);
             }
+        } else {
+            log.warn("⚠️ Could not determine enum class name for field '{}' in class {}",
+                     fieldName, clazz.getSimpleName());
         }
 
         // Fallback: auto-generate label from enum value (ADMIN -> Admin)
         String generatedLabel = FieldLabelGenerator.generateEnumLabel(enumValue);
+        log.info("🔄 Auto-generated label: {} → '{}'", enumValue, generatedLabel);
 
-        // Translate the generated label
-        return translate(generatedLabel, targetLang);
+        // Translate the generated label from field names language to target
+        String translated = translate(generatedLabel, fieldNamesLanguage, targetLang);
+        log.info("✅ Auto label translated: '{}' ({} → {}) = '{}'",
+                  generatedLabel, fieldNamesLanguage, targetLang, translated);
+        return translated;
     }
 
     /**
@@ -447,8 +605,8 @@ public class AutoTranslationService {
     /**
      * Builds a cache key for Redis.
      */
-    private String buildCacheKey(String targetLang, String text) {
-        return String.format("trans:%s:%d", targetLang, text.hashCode());
+    private String buildCacheKey(String sourceLang, String targetLang, String text) {
+        return String.format("trans:%s:%s:%d", sourceLang, targetLang, text.hashCode());
     }
 
     /**
@@ -489,21 +647,24 @@ public class AutoTranslationService {
         for (Field field : fields) {
             String fieldName = field.getName();
 
-            // Skip excluded fields
+            // Skip excluded fields (technical fields)
             if (EXCLUDED_FIELDS.contains(fieldName)) {
                 continue;
             }
 
-            // Skip @NoTranslate fields
-            if (field.isAnnotationPresent(NoTranslate.class)) {
-                continue;
-            }
+            // NOTE: @NoTranslate does NOT exclude from metadata!
+            // @NoTranslate only prevents VALUE translation, not LABEL translation
+            // Users need translated labels for forms even if values aren't translated
+            // Example: Label "Prénom" (translated) for value "Salif" (not translated)
 
             // Generate label (firstName -> First Name)
             String label = FieldLabelGenerator.generateLabel(fieldName);
 
-            // Translate the label
-            String translatedLabel = translate(label, targetLang);
+            // Translate the label from field names language to target
+            String translatedLabel = translate(label, fieldNamesLanguage, targetLang);
+
+            log.debug("📋 Field metadata: {} → '{}' ({}) → '{}' ({})",
+                      fieldName, label, fieldNamesLanguage, translatedLabel, targetLang);
 
             metadata.put(fieldName, translatedLabel);
         }

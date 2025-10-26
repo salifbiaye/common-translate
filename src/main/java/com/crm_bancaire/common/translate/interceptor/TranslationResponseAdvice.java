@@ -64,13 +64,10 @@ public class TranslationResponseAdvice implements ResponseBodyAdvice<Object> {
         // Extract target language from Accept-Language header
         String targetLang = extractLanguage(request);
 
-        // No translation needed if target language is same as source
-        if (sourceLanguage.equals(targetLang)) {
-            log.trace("No translation needed, target language matches source: {}", targetLang);
-            return body;
-        }
-
-        log.debug("Translating response to language: {}", targetLang);
+        // IMPORTANT: Always process responses, even for source language!
+        // Reason: Enum labels must be generated even when targetLang == sourceLanguage
+        // because field names are in English but content is in source language
+        log.info("🌐 Processing response for language: {} (source: {})", targetLang, sourceLanguage);
 
         try {
             // Translate String responses (messages, errors)

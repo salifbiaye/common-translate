@@ -15,12 +15,22 @@ import java.util.Set;
  * REST controller that exposes translation metadata endpoints.
  * Provides field labels for entities annotated with @Translatable.
  *
+ * The base path is configurable per service:
+ * - user-service: /api/users/translate/metadata
+ * - customer-service: /api/customers/translate/metadata
+ *
+ * Configure in application.yml:
+ * translate:
+ *   metadata:
+ *     base-path: /api/users  # Service-specific prefix
+ *
  * Endpoints:
- * - GET /api/translate/metadata/{entity}?lang=en
- * - GET /api/translate/metadata/entities
+ * - GET {base-path}/translate/metadata/{entity}
+ * - GET {base-path}/translate/metadata/entities
+ * - GET {base-path}/translate/metadata/health
  */
 @RestController
-@RequestMapping("/api/translate/metadata")
+@RequestMapping("${translate.metadata.base-path:/api}/translate/metadata")
 @RequiredArgsConstructor
 @Slf4j
 public class TranslationMetadataController {
@@ -35,32 +45,36 @@ public class TranslationMetadataController {
 
     /**
      * Gets translated field labels for a specific entity.
+     * Uses Accept-Language header to determine target language.
      *
      * Example:
-     * GET /api/translate/metadata/User?lang=en
+     * GET /api/translate/metadata/User
+     * Accept-Language: en
      * Response: {"firstName": "First Name", "email": "Email", "telephone": "Telephone"}
      *
-     * GET /api/translate/metadata/User?lang=fr
+     * GET /api/translate/metadata/User
+     * Accept-Language: fr
      * Response: {"firstName": "Prénom", "email": "Email", "telephone": "Téléphone"}
      *
      * @param entity Entity name (as defined in @Translatable annotation)
-     * @param lang   Target language code (optional, defaults to source language)
+     * @param acceptLanguage Accept-Language header (optional, defaults to source language)
      * @return Map of field names to translated labels
      */
     @GetMapping("/{entity}")
     public ResponseEntity<Map<String, String>> getEntityMetadata(
             @PathVariable String entity,
-            @RequestParam(required = false) String lang) {
+            @RequestHeader(value = "Accept-Language", required = false) String acceptLanguage) {
 
         if (!translationEnabled) {
             log.warn("Translation is disabled, returning empty metadata");
             return ResponseEntity.ok(new HashMap<>());
         }
 
-        // Use source language if no language specified
-        String targetLang = lang != null ? lang : sourceLanguage;
+        // Extract language code from Accept-Language header
+        String targetLang = extractLanguageCode(acceptLanguage);
 
-        log.debug("Getting metadata for entity '{}' in language '{}'", entity, targetLang);
+        log.debug("Getting metadata for entity '{}' in language '{}' (from Accept-Language: {})",
+                  entity, targetLang, acceptLanguage);
 
         Map<String, String> metadata = translationService.getEntityMetadata(entity, targetLang);
 
@@ -70,6 +84,24 @@ public class TranslationMetadataController {
         }
 
         return ResponseEntity.ok(metadata);
+    }
+
+    /**
+     * Extracts language code from Accept-Language header.
+     * Supports: "en", "en-US", "en-US,fr;q=0.9"
+     */
+    private String extractLanguageCode(String acceptLanguage) {
+        if (acceptLanguage == null || acceptLanguage.trim().isEmpty()) {
+            return sourceLanguage;
+        }
+
+        // Take first language (before comma)
+        String firstLang = acceptLanguage.split(",")[0].trim();
+
+        // Extract language code (before dash or semicolon)
+        String langCode = firstLang.split("[-;]")[0].trim();
+
+        return langCode.isEmpty() ? sourceLanguage : langCode;
     }
 
     /**
