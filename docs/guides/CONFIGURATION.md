@@ -103,33 +103,58 @@ By default, enum values are automatically capitalized for labels:
 
 ### Custom Enum Mappings
 
-For more precise labels, configure custom mappings:
+For more precise labels, configure custom mappings **in your SOURCE language**:
 
 ```yaml
 translate:
+  source-language: fr  # IMPORTANT: Your code language
+
   enum-labels:
-    # Format: EnumClassName → EnumValue → CustomLabel
+    # Format: EnumClassName → EnumValue → CustomLabel (in SOURCE language!)
     UserRole:
-      ADMIN: Administrator       # Instead of "Admin"
-      CLIENT: Customer           # Instead of "Client"
-      CONSEILLER: Advisor        # Instead of "Conseiller"
+      ADMIN: Administrateur système    # ✅ French (source) → will be translated
+      CLIENT: Client bancaire          # ✅ French (source) → "Banking customer" (en)
+      CONSEILLER: Conseiller financier # ✅ French (source) → "Financial advisor" (en)
 
     AccountStatus:
-      ACTIF: Active
-      INACTIF: Inactive
-      SUSPENDU: Suspended
+      ACTIF: Compte actif      # ✅ French → "Active account" (en)
+      INACTIF: Compte inactif
+      SUSPENDU: Compte suspendu
 
     TransactionType:
-      VIREMENT: Wire Transfer
-      DEPOT: Deposit
-      RETRAIT: Withdrawal
+      VIREMENT: Virement bancaire  # ✅ French → "Bank transfer" (en)
+      DEPOT: Dépôt
+      RETRAIT: Retrait
+```
+
+**⚠️ IMPORTANT: Use your SOURCE language for custom labels!**
+
+❌ **WRONG (if source is French):**
+```yaml
+translate:
+  source-language: fr
+  enum-labels:
+    UserRole:
+      ADMIN: Administrator  # ❌ English! LibreTranslate will be confused
+```
+
+✅ **CORRECT (if source is French):**
+```yaml
+translate:
+  source-language: fr
+  enum-labels:
+    UserRole:
+      ADMIN: Administrateur système  # ✅ French! Will translate to "System administrator" (en)
 ```
 
 **How it works:**
 1. System detects enum field: `typeUser: "ADMIN"`
 2. Checks for custom mapping in config
-3. If found: Uses `Administrator` → Translates to "Administrator", "Administrateur", "Administrador"
-4. If not found: Auto-capitalizes `ADMIN` → `Admin` → Translates
+3. If found: Uses `"Administrateur système"` → LibreTranslate translates to target language
+   - Accept-Language: **en** → `"System administrator"`
+   - Accept-Language: **es** → `"Administrador del sistema"`
+   - Accept-Language: **fr** → `"Administrateur système"` (no translation, same as source)
+4. If not found: Auto-capitalizes `ADMIN` → `"Admin"` → LibreTranslate translates
 
 **Result in API response:**
 ```json
@@ -141,11 +166,30 @@ translate:
 
 ### When to Use Custom Mappings
 
-Use custom mappings when:
-- ✅ Default capitalization is not user-friendly (`SUPER_USER` → prefer "Super User" over "Superuser")
-- ✅ Enum values are abbreviations (`CONSEILLER` → prefer "Advisor" over "Conseiller")
-- ✅ Business terminology differs from technical names
-- ❌ Default capitalization is already good (`ADMIN` → `Admin` is fine)
+**✅ RECOMMENDED for these cases:**
+
+| Enum Value | Without Config | With Config | Why Config is Better |
+|------------|---------------|-------------|---------------------|
+| `CLIENT` | `"Client"` → `"Client"` ❌ (same word in FR/EN) | `"Client bancaire"` → `"Banking customer"` ✅ | Adds context for better translation |
+| `ADMIN` | `"Admin"` → `"Admin"` ❌ (too short) | `"Administrateur système"` → `"System administrator"` ✅ | More precise translation |
+| `NUM_COMPTE` | `"Num Compte"` → `"Num Account"` ❌ | `"Numéro de compte"` → `"Account number"` ✅ | Expands abbreviations |
+
+**❌ NOT NEEDED for these cases:**
+
+| Enum Value | Without Config | Result | Why It Works |
+|------------|---------------|--------|--------------|
+| `CONSEILLER` | `"Conseiller"` → `"Advisor"` ✅ | Works well | French word translates correctly |
+| `ACTIF` | `"Actif"` → `"Active"` ✅ | Works well | Clear French word |
+| `SUSPENDU` | `"Suspendu"` → `"Suspended"` ✅ | Works well | Clear French word |
+| `SUPER_USER` | `"Super User"` → `"Super User"` ✅ | Works well | International term |
+
+**Best Practice:**
+- Use custom mappings for: **abbreviations**, **ambiguous words**, **business terms**
+- Skip custom mappings for: **clear French words**, **international terms**
+
+**Why add context?**
+- `"Client"` alone → LibreTranslate doesn't know if it's "Client", "Customer", "Patron"
+- `"Client bancaire"` → More context = Better translation = `"Banking customer"`
 
 ---
 
@@ -229,6 +273,50 @@ public class User {
     private String firstName;  // Will appear in metadata
 }
 ```
+
+### Best Practices for Field Names
+
+**⚠️ IMPORTANT: Use full French words for best translation quality!**
+
+**✅ GOOD (French field names with source-language: fr):**
+```java
+@Entity
+@Translatable(name = "User")
+public class User {
+    private String numeroClient;      // → "Numero Client" → "Customer Number" ✅
+    private String prenomUtilisateur; // → "Prenom Utilisateur" → "First Name User" ✅
+    private String dateNaissance;     // → "Date Naissance" → "Birth Date" ✅
+    private String adresseEmail;      // → "Adresse Email" → "Email Address" ✅
+}
+```
+
+**❌ AVOID (Abbreviations or mixed languages):**
+```java
+@Entity
+@Translatable(name = "User")
+public class User {
+    private String numClient;    // → "Num Client" → "Num Client" ❌ (abbr. not translated well)
+    private String firstName;    // → "First Name" → "First Name" ⚠️ (already English, won't translate)
+    private String emailAddr;    // → "Email Addr" → "Email Addr" ❌ (abbr. not translated well)
+    private String dtNaiss;      // → "Dt Naiss" → "Dt Naiss" ❌ (abbr. not translated well)
+}
+```
+
+**Translation Results:**
+
+| Field Name | Auto-Generated Label | LibreTranslate fr→en | Result Quality |
+|------------|---------------------|---------------------|----------------|
+| `numeroClient` | "Numero Client" | "Customer Number" | ✅ Excellent |
+| `numClient` | "Num Client" | "Num Client" | ❌ Poor (abbreviation) |
+| `prenomUtilisateur` | "Prenom Utilisateur" | "First Name User" | ✅ Good |
+| `firstName` | "First Name" | "First Name" | ⚠️ Already English |
+| `dateCreation` | "Date Creation" | "Creation Date" | ✅ Good |
+| `isActive` | "Is Active" | "Is Active" | ⚠️ Already English |
+
+**Recommendation:**
+- Use **full French words** in field names when `source-language: fr`
+- Avoid abbreviations (`num`, `dt`, `addr`)
+- This ensures high-quality automatic translation without custom config
 
 ---
 

@@ -199,19 +199,36 @@ function UserProfile({ user }) {
 
 ### Custom Enum Labels
 
-Configure custom labels in `application.yml`:
+Configure custom labels in `application.yml` **using your SOURCE language**:
 
 ```yaml
 translate:
+  source-language: fr  # Your code language
+
   enum-labels:
     UserRole:
-      ADMIN: Administrator
-      CLIENT: Customer
-      CONSEILLER: Advisor
+      ADMIN: Administrateur système    # ✅ French (will be translated)
+      CLIENT: Client bancaire          # ✅ French → "Banking customer" (en)
+      CONSEILLER: Conseiller financier # ✅ French → "Financial advisor" (en)
 ```
 
-Without config: `ADMIN` → `Admin` (auto-capitalized) → Translated
-With config: `ADMIN` → `Administrator` → Translated
+**Translation flow:**
+
+**Without config:**
+- `ADMIN` → Auto-capitalize: `"Admin"` → LibreTranslate → `"Admin"` ❌ (not really translated, too short)
+
+**With config:**
+- `ADMIN` → Custom label: `"Administrateur système"` → LibreTranslate → `"System administrator"` ✅
+
+**Why add context?**
+
+Some enum values don't translate well automatically:
+- `CLIENT` → `"Client"` → Same word in French/English ❌
+- `ADMIN` → `"Admin"` → Too short, not translated ❌
+
+Adding context improves translation:
+- `CLIENT` → `"Client bancaire"` → `"Banking customer"` ✅
+- `ADMIN` → `"Administrateur système"` → `"System administrator"` ✅
 
 ---
 
@@ -366,6 +383,46 @@ GET /api/translate/metadata/health
   "entities": ["User", "Account", "Module", "Product"]
 }
 ```
+
+### Translation Caching
+
+**When is LibreTranslate called?**
+
+**First request (cache MISS):**
+```
+User requests with Accept-Language: en
+→ Translate "Administrateur" from fr to en
+→ Call LibreTranslate API (~100-300ms)
+→ Store in Redis: "trans:en:Administrateur" = "Administrator"
+→ Return "Administrator"
+```
+
+**Subsequent requests (cache HIT):**
+```
+Another user requests with Accept-Language: en
+→ Translate "Administrateur" from fr to en
+→ Check Redis: "trans:en:Administrateur" exists? YES!
+→ Return "Administrator" from cache (~1-2ms)
+→ NO LibreTranslate call ✅
+```
+
+**Cache TTL:**
+```yaml
+translate:
+  cache:
+    ttl: 86400  # 24 hours (default)
+```
+
+After 24 hours, cache expires and LibreTranslate is called again.
+
+**Performance:**
+- First translation: ~100-300ms (LibreTranslate API)
+- Cached translations: ~1-2ms (Redis lookup)
+- Cache hit rate in production: >99% for stable content
+
+**Cache keys:**
+- Translations: `trans:{lang}:{text_hashcode}`
+- Metadata: `metadata:{entity}:{lang}`
 
 ---
 

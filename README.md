@@ -160,15 +160,17 @@ translate:
     ttl: 86400                        # Cache TTL in seconds (default: 24h)
   libretranslate:
     url: http://libretranslate:5000   # LibreTranslate server URL
-  enum-labels:                        # Optional: Custom enum label mappings
+  enum-labels:                        # Optional: Custom enum label mappings (use SOURCE language!)
     UserRole:
-      ADMIN: Administrator
-      CLIENT: Customer
-      CONSEILLER: Advisor
+      ADMIN: Administrateur système   # ✅ French (if source is fr)
+      CLIENT: Client bancaire         # ✅ French → "Banking customer" (en)
+      CONSEILLER: Conseiller financier
     UserLevel:
-      LEVEL_1: Level One
-      LEVEL_2: Level Two
+      LEVEL_1: Niveau Un
+      LEVEL_2: Niveau Deux
 ```
+
+**⚠️ IMPORTANT:** Custom enum labels must be in your **SOURCE language** (defined by `source-language`). They will be automatically translated to target languages by LibreTranslate.
 
 ## Enum Label Generation
 
@@ -341,18 +343,55 @@ Each request is independent with its own cache key:
 - `trans:es:CLIENT` → "Cliente"
 - `trans:de:CLIENT` → "Kunde"
 
-## Performance
+## Performance & Caching
+
+### How Caching Works
+
+**First translation (cache MISS):**
+```
+Request: typeUser="ADMIN" with Accept-Language: en
+→ Auto-generate: "Admin" (or custom: "Administrateur système")
+→ Check Redis cache: "trans:en:Admin" → NOT FOUND
+→ Call LibreTranslate API (~100-300ms)
+→ Store in Redis: "trans:en:Admin" = "Administrator"
+→ Return: "Administrator"
+```
+
+**Subsequent translations (cache HIT):**
+```
+Request: typeUser="ADMIN" with Accept-Language: en
+→ Auto-generate: "Admin"
+→ Check Redis cache: "trans:en:Admin" → FOUND!
+→ Return from cache (~1-2ms) ✅ NO LibreTranslate call
+```
+
+### Performance Metrics
 
 **First request (cache miss):**
 - Business cache hit: 5ms
-- Translation (LibreTranslate): 100-300ms
+- Translation (LibreTranslate API): 100-300ms
 - Redis cache save: 1ms
 - **Total: ~310ms**
 
 **Subsequent requests (cache hit):**
 - Business cache hit: 5ms
-- Translation (Redis cache): 2ms
+- Translation (Redis cache): 1-2ms
 - **Total: ~7-10ms** 🚀
+
+**Cache hit rate in production:** >99% for stable content
+
+### Cache Configuration
+
+```yaml
+translate:
+  cache:
+    ttl: 86400  # 24 hours (default)
+    # After 24h, cache expires and LibreTranslate is called again
+```
+
+**Best practices:**
+- Development: 3600s (1h) for frequent changes
+- Production: 86400s (24h) or 172800s (48h) for stable content
 
 ## Infrastructure Setup
 
