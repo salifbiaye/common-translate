@@ -1,6 +1,9 @@
 package com.crm_bancaire.common.translate.service;
 
 import com.crm_bancaire.common.translate.annotation.NoTranslate;
+import com.crm_bancaire.common.translate.annotation.Translatable;
+import com.crm_bancaire.common.translate.config.EnumLabelConfig;
+import com.crm_bancaire.common.translate.util.FieldLabelGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -10,14 +13,13 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.lang.reflect.Field;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,7 +32,14 @@ import java.util.concurrent.TimeUnit;
 public class AutoTranslationService {
     private final RestTemplate restTemplate;
     private final RedisTemplate<String, String> redisTemplate;
+    private final EnumLabelConfig enumLabelConfig;
+    private final ApplicationContext applicationContext;
     private ObjectMapper objectMapper;
+
+    /**
+     * Map of entity names to their Class objects for metadata generation
+     */
+    private final Map<String, Class<?>> translatableEntities = new HashMap<>();
 
     @PostConstruct
     public void init() {
@@ -38,7 +47,39 @@ public class AutoTranslationService {
         this.objectMapper = new ObjectMapper();
         this.objectMapper.registerModule(new JavaTimeModule());
         this.objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        log.info("AutoTranslationService initialized with Java 8 date/time support");
+
+        // Scan for @Translatable entities
+        scanTranslatableEntities();
+
+        log.info("AutoTranslationService initialized with Java 8 date/time support and {} translatable entities",
+                translatableEntities.size());
+    }
+
+    /**
+     * Scans the application context for classes annotated with @Translatable.
+     * These entities will be available for metadata generation.
+     */
+    private void scanTranslatableEntities() {
+        try {
+            Map<String, Object> beansWithAnnotation = applicationContext.getBeansWithAnnotation(jakarta.persistence.Entity.class);
+
+            for (Object bean : beansWithAnnotation.values()) {
+                Class<?> beanClass = bean.getClass();
+                // Handle proxy classes
+                if (beanClass.getName().contains("$$")) {
+                    beanClass = beanClass.getSuperclass();
+                }
+
+                Translatable annotation = beanClass.getAnnotation(Translatable.class);
+                if (annotation != null) {
+                    String entityName = annotation.name();
+                    translatableEntities.put(entityName, beanClass);
+                    log.info("Registered translatable entity: {} -> {}", entityName, beanClass.getSimpleName());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to scan for @Translatable entities: {}", e.getMessage());
+        }
     }
 
     @Value("${translate.source-language:fr}")
@@ -206,42 +247,112 @@ public class AutoTranslationService {
 
     /**
      * Recursively translates String fields in a JSON node.
+     * Also adds automatic enum label fields for detected enum values.
      */
     private void translateNode(JsonNode node, String targetLang, Class<?> clazz) {
         if (node.isObject()) {
-            node.fields().forEachRemaining(entry -> {
+            ObjectNode objectNode = (ObjectNode) node;
+
+            // First pass: identify enums and add label fields
+            List<Map.Entry<String, JsonNode>> entries = new ArrayList<>();
+            node.fields().forEachRemaining(entries::add);
+
+            for (Map.Entry<String, JsonNode> entry : entries) {
                 String fieldName = entry.getKey();
                 JsonNode value = entry.getValue();
+
+                // Skip already processed label fields
+                if (fieldName.endsWith("Label")) {
+                    continue;
+                }
 
                 // Skip excluded fields
                 if (EXCLUDED_FIELDS.contains(fieldName)) {
                     log.trace("Skipping excluded field: {}", fieldName);
-                    return;
+                    continue;
                 }
 
                 // Check @NoTranslate annotation
                 if (hasNoTranslateAnnotation(clazz, fieldName)) {
                     log.trace("Skipping @NoTranslate field: {}", fieldName);
-                    return;
+                    continue;
                 }
 
-                // Translate text fields
+                // Handle text fields
                 if (value.isTextual()) {
                     String text = value.asText();
-                    // Don't translate if it's non-translatable OR looks like an enum
-                    if (!isNonTranslatable(text) && !looksLikeEnum(text)) {
+
+                    // Check if it's an enum-like value
+                    if (looksLikeEnum(text)) {
+                        // Add a translated label field for the enum
+                        String enumLabel = getEnumLabel(clazz, fieldName, text, targetLang);
+                        objectNode.put(fieldName + "Label", enumLabel);
+                        log.trace("Added enum label: {} -> {}", text, enumLabel);
+                    }
+                    // Translate regular text fields
+                    else if (!isNonTranslatable(text)) {
                         String translated = translate(text, targetLang);
-                        ((ObjectNode) node).put(fieldName, translated);
+                        objectNode.put(fieldName, translated);
                     }
                 }
                 // Recursively handle nested objects and arrays
                 else if (value.isObject() || value.isArray()) {
                     translateNode(value, targetLang, clazz);
                 }
-            });
+            }
         } else if (node.isArray()) {
             node.forEach(item -> translateNode(item, targetLang, clazz));
         }
+    }
+
+    /**
+     * Generates a translated label for an enum value.
+     * Uses custom mapping if available, otherwise generates from enum value.
+     *
+     * @param clazz     The entity class
+     * @param fieldName The field name (e.g., "typeUser")
+     * @param enumValue The enum value (e.g., "ADMIN")
+     * @param targetLang Target language
+     * @return Translated enum label
+     */
+    private String getEnumLabel(Class<?> clazz, String fieldName, String enumValue, String targetLang) {
+        // Try to get field type to determine enum class name
+        String enumClassName = getEnumClassName(clazz, fieldName);
+
+        // Check for custom mapping first
+        if (enumClassName != null) {
+            String customLabel = enumLabelConfig.getCustomLabel(enumClassName, enumValue);
+            if (customLabel != null) {
+                // Translate the custom label
+                return translate(customLabel, targetLang);
+            }
+        }
+
+        // Fallback: auto-generate label from enum value (ADMIN -> Admin)
+        String generatedLabel = FieldLabelGenerator.generateEnumLabel(enumValue);
+
+        // Translate the generated label
+        return translate(generatedLabel, targetLang);
+    }
+
+    /**
+     * Gets the enum class name for a given field.
+     *
+     * @param clazz     The entity class
+     * @param fieldName The field name
+     * @return Enum class simple name, or null if not found
+     */
+    private String getEnumClassName(Class<?> clazz, String fieldName) {
+        try {
+            Field field = clazz.getDeclaredField(fieldName);
+            Class<?> fieldType = field.getType();
+            if (fieldType.isEnum()) {
+                return fieldType.getSimpleName();
+            }
+        } catch (NoSuchFieldException e) {
+            log.trace("Field '{}' not found in class {}", fieldName, clazz.getSimpleName());
+        }
+        return null;
     }
 
     /**
@@ -338,5 +449,83 @@ public class AutoTranslationService {
      */
     private String buildCacheKey(String targetLang, String text) {
         return String.format("trans:%s:%d", targetLang, text.hashCode());
+    }
+
+    /**
+     * Gets translated field metadata (labels) for a specific entity.
+     * Results are cached in Redis for performance.
+     *
+     * @param entityName The entity name (as defined in @Translatable annotation)
+     * @param targetLang Target language code
+     * @return Map of field names to translated labels
+     */
+    public Map<String, String> getEntityMetadata(String entityName, String targetLang) {
+        // Check Redis cache first
+        String cacheKey = "metadata:" + entityName + ":" + targetLang;
+        String cached = redisTemplate.opsForValue().get(cacheKey);
+
+        if (cached != null) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, String> cachedMetadata = objectMapper.readValue(cached, Map.class);
+                log.debug("Cache HIT for metadata: {}/{}", entityName, targetLang);
+                return cachedMetadata;
+            } catch (Exception e) {
+                log.warn("Failed to deserialize cached metadata: {}", e.getMessage());
+            }
+        }
+
+        // Get entity class
+        Class<?> entityClass = translatableEntities.get(entityName);
+        if (entityClass == null) {
+            log.warn("Unknown entity for metadata: {}", entityName);
+            return new HashMap<>();
+        }
+
+        // Generate field labels
+        Map<String, String> metadata = new HashMap<>();
+        Field[] fields = entityClass.getDeclaredFields();
+
+        for (Field field : fields) {
+            String fieldName = field.getName();
+
+            // Skip excluded fields
+            if (EXCLUDED_FIELDS.contains(fieldName)) {
+                continue;
+            }
+
+            // Skip @NoTranslate fields
+            if (field.isAnnotationPresent(NoTranslate.class)) {
+                continue;
+            }
+
+            // Generate label (firstName -> First Name)
+            String label = FieldLabelGenerator.generateLabel(fieldName);
+
+            // Translate the label
+            String translatedLabel = translate(label, targetLang);
+
+            metadata.put(fieldName, translatedLabel);
+        }
+
+        // Cache the result
+        try {
+            String json = objectMapper.writeValueAsString(metadata);
+            redisTemplate.opsForValue().set(cacheKey, json, cacheTtl, TimeUnit.SECONDS);
+            log.debug("Cached metadata for: {}/{}", entityName, targetLang);
+        } catch (Exception e) {
+            log.warn("Failed to cache metadata: {}", e.getMessage());
+        }
+
+        return metadata;
+    }
+
+    /**
+     * Gets a list of all registered translatable entities.
+     *
+     * @return Set of entity names
+     */
+    public Set<String> getRegisteredEntities() {
+        return new HashSet<>(translatableEntities.keySet());
     }
 }

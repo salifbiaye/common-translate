@@ -7,9 +7,12 @@ Automatic translation module for Spring Boot microservices using LibreTranslate 
 - 🌍 **Automatic translation** of REST API responses based on `Accept-Language` header
 - ⚡ **High performance** with Redis caching (24h TTL)
 - 🎯 **Zero code changes** in controllers - just add an annotation
+- 🏷️ **Automatic enum label generation** - adds translated labels for enum values
+- 🗂️ **Field metadata endpoint** - get translated field labels for frontend forms
 - 🔒 **Smart exclusions** - names, emails, UUIDs, dates automatically excluded
 - 🌐 **Multi-language support** - fr, en, es, de, it, pt
 - 📦 **Configurable source language** - works for any project language
+- 🔧 **Custom enum mappings** - optional YAML configuration for precise labels
 
 ## Quick Start
 
@@ -19,7 +22,7 @@ Automatic translation module for Spring Boot microservices using LibreTranslate 
 <dependency>
     <groupId>com.crm-bancaire</groupId>
     <artifactId>common-translate</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 </dependency>
 ```
 
@@ -157,7 +160,171 @@ translate:
     ttl: 86400                        # Cache TTL in seconds (default: 24h)
   libretranslate:
     url: http://libretranslate:5000   # LibreTranslate server URL
+  enum-labels:                        # Optional: Custom enum label mappings
+    UserRole:
+      ADMIN: Administrator
+      CLIENT: Customer
+      CONSEILLER: Advisor
+    UserLevel:
+      LEVEL_1: Level One
+      LEVEL_2: Level Two
 ```
+
+## Enum Label Generation
+
+**v1.0.1** automatically adds translated label fields for enum values!
+
+### How It Works
+
+When the system detects an enum field (like `typeUser: "ADMIN"`), it automatically adds a label field:
+
+**Input (French source code):**
+```json
+{
+  "id": "123",
+  "firstName": "Jean",
+  "typeUser": "ADMIN"
+}
+```
+
+**Output (Accept-Language: en):**
+```json
+{
+  "id": "123",
+  "firstName": "Jean",
+  "typeUser": "ADMIN",           // Preserved for logic
+  "typeUserLabel": "Administrator"  // Added for display (translated)
+}
+```
+
+**Output (Accept-Language: es):**
+```json
+{
+  "id": "123",
+  "firstName": "Jean",
+  "typeUser": "ADMIN",
+  "typeUserLabel": "Administrador"  // Spanish translation
+}
+```
+
+### Auto-Capitalization vs Custom Mapping
+
+**Default behavior (auto-capitalize):**
+- `ADMIN` → `Admin` → Translated to "Admin", "Administrador", etc.
+- `SUPER_USER` → `Super User` → Translated appropriately
+
+**Custom mapping (optional):**
+```yaml
+translate:
+  enum-labels:
+    UserRole:
+      ADMIN: Administrator  # More precise than "Admin"
+      CLIENT: Customer      # Instead of just "Client"
+```
+
+With custom mapping:
+- `ADMIN` → `Administrator` → Translated to "Administrator", "Administrateur", "Administrador"
+
+### Why Both Value and Label?
+
+- **Enum value** (`typeUser: "ADMIN"`) - Used for logic, APIs, database queries
+- **Enum label** (`typeUserLabel: "Administrator"`) - Used for display in UI (dropdowns, tables, etc.)
+
+## Field Metadata Endpoint
+
+Get translated field labels for building multilingual forms and UIs.
+
+### Mark Entities for Metadata
+
+Add `@Translatable` annotation to your entity classes:
+
+```java
+@Entity
+@Translatable(name = "User")
+@Data
+public class User {
+    private String id;
+    private String firstName;
+    private String lastName;
+    private String email;
+    private String telephone;
+    private UserRole typeUser;
+}
+```
+
+### Get Field Labels
+
+**Request:**
+```bash
+GET /api/translate/metadata/User?lang=en
+```
+
+**Response:**
+```json
+{
+  "firstName": "First Name",
+  "lastName": "Last Name",
+  "telephone": "Telephone",
+  "typeUser": "Type User"
+}
+```
+
+**Request:**
+```bash
+GET /api/translate/metadata/User?lang=fr
+```
+
+**Response:**
+```json
+{
+  "firstName": "Prénom",
+  "lastName": "Nom",
+  "telephone": "Téléphone",
+  "typeUser": "Type Utilisateur"
+}
+```
+
+### Use Cases
+
+**Frontend form labels:**
+```jsx
+// React example
+const { data: labels } = useQuery('/api/translate/metadata/User?lang=en');
+
+<Form>
+  <label>{labels.firstName}</label>
+  <input name="firstName" />
+
+  <label>{labels.email}</label>
+  <input name="email" />
+</Form>
+```
+
+**Dynamic table headers:**
+```jsx
+const columns = Object.keys(labels).map(field => ({
+  field: field,
+  headerName: labels[field], // Translated!
+  sortable: true
+}));
+```
+
+### List All Translatable Entities
+
+```bash
+GET /api/translate/metadata/entities
+```
+
+**Response:**
+```json
+["User", "Account", "Module", "Product"]
+```
+
+### Performance
+
+- First request: Metadata generated from entity class
+- Subsequent requests: Served from Redis cache (2-5ms)
+- Cache TTL: Same as translation cache (default 24h)
 
 ## Multi-User Scenarios
 

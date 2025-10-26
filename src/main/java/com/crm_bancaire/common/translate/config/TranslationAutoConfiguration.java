@@ -22,12 +22,15 @@ import java.time.Duration;
  * - RestTemplate for LibreTranslate API calls
  * - AutoTranslationService for translation logic
  * - TranslationResponseAdvice for automatic HTTP response translation
+ * - EnumLabelConfig for custom enum label mappings
+ * - TranslationMetadataController for field metadata endpoints
  *
  * Configuration properties:
  * - translate.enabled: Enable/disable translation (default: true)
  * - translate.source-language: Source language of your code (default: fr)
  * - translate.libretranslate.url: LibreTranslate server URL (required)
  * - translate.cache.ttl: Cache TTL in seconds (default: 86400 = 24h)
+ * - translate.enum-labels: Custom enum label mappings (optional)
  */
 @Configuration
 @ComponentScan(basePackages = "com.crm_bancaire.common.translate")
@@ -47,30 +50,5 @@ public class TranslationAutoConfiguration {
                 .setConnectTimeout(Duration.ofSeconds(5))
                 .setReadTimeout(Duration.ofSeconds(10))
                 .build();
-    }
-
-    /**
-     * Creates the AutoTranslationService bean.
-     * Uses existing RedisTemplate from the application context.
-     */
-    @Bean
-    @ConditionalOnMissingBean
-    public AutoTranslationService autoTranslationService(
-            RestTemplate translationRestTemplate,
-            RedisTemplate<String, String> redisTemplate) {
-        log.info("Initializing AutoTranslationService");
-        return new AutoTranslationService(translationRestTemplate, redisTemplate);
-    }
-
-    /**
-     * Creates the TranslationResponseAdvice bean.
-     * This advice automatically intercepts REST API responses for translation.
-     */
-    @Bean
-    @ConditionalOnMissingBean
-    public TranslationResponseAdvice translationResponseAdvice(
-            AutoTranslationService autoTranslationService) {
-        log.info("Initializing TranslationResponseAdvice - automatic translation enabled");
-        return new TranslationResponseAdvice(autoTranslationService);
     }
 }

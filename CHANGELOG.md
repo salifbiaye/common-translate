@@ -14,26 +14,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - ✨ **JsonNode-based translation**: No more round-trip conversion! Object → JsonNode → Translate → Return JsonNode
 - 🧠 **Smart enum detection**: Automatically detects and skips UPPERCASE enum values (CLIENT, ADMIN, etc.)
+- 🏷️ **Automatic enum label generation**: Adds `{fieldName}Label` fields for enums with translated labels
+  - Example: `typeUser: "ADMIN"` → adds `typeUserLabel: "Administrator"` (translated)
+  - Hybrid approach: Auto-capitalizes (ADMIN → Admin) or uses custom mappings from config
+- 🗂️ **Metadata endpoint**: `/api/translate/metadata/{entity}?lang=en` for field labels
+  - Returns translated field labels: `{"firstName": "First Name", "email": "Email"}`
+  - Cached in Redis for performance
+  - Works with entities annotated with `@Translatable`
 - 📦 **Full object support**: Translates UserResponse, ModuleResponse, List, Page without breaking enums/dates
+- 🔧 **Custom enum label mappings**: Optional YAML configuration for precise enum labels
+- 🎯 **@Translatable annotation**: Mark entities for metadata generation
 
 ### Changed
 - Translation now returns JsonNode instead of reconverted objects (avoids deserialization errors)
-- Enum values (>70% uppercase) are automatically skipped
+- Enum values (>70% uppercase) are automatically skipped but get translated label fields
 - Dates, IDs, emails remain unchanged via smart detection
+- AutoTranslationService now scans for @Translatable entities at startup
 
 **What Gets Translated**:
 - ✅ String messages: `"Utilisateur créé"` → `"User created"`
 - ✅ Object descriptions/titles: `{title: "Gestion",...}` → `{title: "Management",...}`
 - ✅ Lists and Pages: All items translated
-- ❌ Enums: `"CLIENT"`, `"ADMIN"` → Unchanged (detected as enums)
+- ✅ Enum labels: `typeUser: "ADMIN"` → adds `typeUserLabel: "Administrator"` (translated)
+- ❌ Enum values: `"CLIENT"`, `"ADMIN"` → Unchanged (preserved for logic)
 - ❌ Dates: `"2024-10-25"` → Unchanged (auto-detected)
 - ❌ Personal data: `firstName`, `lastName`, `email` → Unchanged (@NoTranslate / excluded fields)
 
 ### Technical Details
-- Object → JsonNode → Translate strings in-place → Return JsonNode (Spring serializes)
+- Object → JsonNode → Translate strings in-place → Add enum labels → Return JsonNode
 - No round-trip conversion = no enum/date errors
 - Enum detection: checks for >70% uppercase letters, no spaces, length < 50
+- Enum label generation: ADMIN → Admin → Translate to "Administrator", "Administrateur", etc.
+- Custom enum mappings via `translate.enum-labels` in application.yml
+- Metadata generation with Redis caching
+- Field label auto-generation: camelCase → Title Case (firstName → First Name)
 - Works with all response types: Single objects, List, Page
+
+### New Components
+- `@Translatable`: Annotation for entities with metadata
+- `EnumLabelConfig`: Configuration for custom enum label mappings
+- `FieldLabelGenerator`: Utility for camelCase → Title Case conversion
+- `TranslationMetadataController`: REST endpoints for field labels
 
 ## [1.0.0] - 2024-10-25
 
