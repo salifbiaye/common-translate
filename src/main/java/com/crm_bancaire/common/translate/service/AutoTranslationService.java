@@ -176,7 +176,12 @@ public class AutoTranslationService {
     private static final Set<String> EXCLUDED_FIELDS = Set.of(
             "id", "uuid", "password", "token", "keycloakId",
             "createdAt", "updatedAt", "dateCreation", "dateModification",
-            "url", "uri", "sub", "iss"
+            "url", "uri", "sub", "iss",
+            // Champs financiers (BigDecimal) - NE JAMAIS traduire pour éviter corruption
+            "solde", "montant", "commission", "frais", "totalCost",
+            "currentValue", "gainLoss", "totalValue", "investedAmount",
+            "unrealizedGain", "realizedGain", "dividendsReceived",
+            "unitCost", "currentPrice", "quantity"
     );
 
     /**
@@ -212,7 +217,7 @@ public class AutoTranslationService {
 
         // No translation needed if target is same as actual source
         if (actualSource.equals(targetLang)) {
-            log.info("⏭️  Skipping translation (same language): '{}' ({} → {})", text, actualSource, targetLang);
+            log.trace("⏭️  Skipping translation (same language): '{}' ({} → {})", text, actualSource, targetLang);
             return text;
         }
 
@@ -240,7 +245,7 @@ public class AutoTranslationService {
 
             // Both caches missed - call LibreTranslate API
             // Only ONE thread reaches this point for concurrent requests
-            log.info("🌐 Calling LibreTranslate (L1+L2 cache MISS): '{}' ({} → {})", text, actualSource, targetLang);
+            log.debug("🌐 Calling LibreTranslate (L1+L2 cache MISS): '{}' ({} → {})", text, actualSource, targetLang);
 
             try {
                 Map<String, String> request = Map.of(
@@ -263,7 +268,7 @@ public class AutoTranslationService {
                     // Store in L2 cache (Redis) for other service instances
                     redisTemplate.opsForValue().set(cacheKey, translated, cacheTtl, TimeUnit.SECONDS);
 
-                    log.info("✅ LibreTranslate result: '{}' ({} → {}) = '{}'", text, actualSource, targetLang, translated);
+                    log.debug("✅ LibreTranslate result: '{}' ({} → {}) = '{}'", text, actualSource, targetLang, translated);
                     return translated;
                 }
 
@@ -386,8 +391,7 @@ public class AutoTranslationService {
      * Also adds automatic enum label fields for detected enum values.
      */
     private void translateNode(JsonNode node, String targetLang, Class<?> clazz) {
-        log.info("🔄 Processing node for translation: class={}, targetLang={}, sourceLanguage={}",
-                 clazz.getSimpleName(), targetLang, sourceLanguage);
+
 
         if (node.isObject()) {
             ObjectNode objectNode = (ObjectNode) node;
@@ -420,16 +424,16 @@ public class AutoTranslationService {
 
                     // Check if it's an enum-like value
                     if (looksLikeEnum(text)) {
-                        log.info("🎯 Detected enum field: {}={} (looks like enum)", fieldName, text);
+                        log.debug("🎯 Detected enum field: {}={} (looks like enum)", fieldName, text);
                         // ALWAYS add enum label, even for @NoTranslate fields
                         // (Labels are for UI display, @NoTranslate only affects VALUES)
                         String enumLabel = getEnumLabel(clazz, fieldName, text, targetLang);
                         objectNode.put(fieldName + "Label", enumLabel);
-                        log.info("✅ Added enum label: {}={} → {}Label={}", fieldName, text, fieldName, enumLabel);
+                        log.debug("✅ Added enum label: {}={} → {}Label={}", fieldName, text, fieldName, enumLabel);
                     }
                     // Translate regular text fields ONLY if NOT marked with @NoTranslate
                     else if (!hasNoTranslate && !sourceLanguage.equals(targetLang) && !isNonTranslatable(text)) {
-                        log.info("📝 Translating text field: {}='{}'", fieldName, text);
+                        log.debug("📝 Translating text field: {}='{}'", fieldName, text);
                         String translated = translate(text, targetLang);
                         objectNode.put(fieldName, translated);
                     } else {
@@ -461,34 +465,34 @@ public class AutoTranslationService {
         // Try to get field type to determine enum class name
         String enumClassName = getEnumClassName(clazz, fieldName);
 
-        log.info("🔍 Getting enum label: class={}, field={}, enumValue={}, enumClassName={}, targetLang={}",
+        log.debug("🔍 Getting enum label: class={}, field={}, enumValue={}, enumClassName={}, targetLang={}",
                   clazz.getSimpleName(), fieldName, enumValue, enumClassName, targetLang);
 
         // Check for custom mapping first
         if (enumClassName != null) {
             String customLabel = enumLabelConfig.getCustomLabel(enumClassName, enumValue);
             if (customLabel != null) {
-                log.info("✅ Using custom label: {}.{} → '{}' (from config)", enumClassName, enumValue, customLabel);
+                log.debug("✅ Using custom label: {}.{} → '{}' (from config)", enumClassName, enumValue, customLabel);
                 // Translate the custom label from SOURCE language to target
                 String translated = translate(customLabel, sourceLanguage, targetLang);
-                log.info("✅ Custom label translated: '{}' ({} → {}) = '{}'",
+                log.debug("✅ Custom label translated: '{}' ({} → {}) = '{}'",
                          customLabel, sourceLanguage, targetLang, translated);
                 return translated;
             } else {
-                log.info("ℹ️ No custom label found for {}.{}, using auto-generation", enumClassName, enumValue);
+                log.debug("ℹ️ No custom label found for {}.{}, using auto-generation", enumClassName, enumValue);
             }
         } else {
-            log.warn("⚠️ Could not determine enum class name for field '{}' in class {}",
+            log.debug("⚠️ Could not determine enum class name for field '{}' in class {}",
                      fieldName, clazz.getSimpleName());
         }
 
         // Fallback: auto-generate label from enum value (ADMIN -> Admin)
         String generatedLabel = FieldLabelGenerator.generateEnumLabel(enumValue);
-        log.info("🔄 Auto-generated label: {} → '{}'", enumValue, generatedLabel);
+        log.debug("🔄 Auto-generated label: {} → '{}'", enumValue, generatedLabel);
 
         // Translate the generated label from field names language to target
         String translated = translate(generatedLabel, fieldNamesLanguage, targetLang);
-        log.info("✅ Auto label translated: '{}' ({} → {}) = '{}'",
+        log.debug("✅ Auto label translated: '{}' ({} → {}) = '{}'",
                   generatedLabel, fieldNamesLanguage, targetLang, translated);
         return translated;
     }
@@ -604,9 +608,13 @@ public class AutoTranslationService {
 
     /**
      * Builds a cache key for Redis.
+     * Format: trans:{source}:{target}:{text}
+     * Example: trans:fr:en:Admin
+     *
+     * Uses full text for readability and easy debugging.
      */
     private String buildCacheKey(String sourceLang, String targetLang, String text) {
-        return String.format("trans:%s:%s:%d", sourceLang, targetLang, text.hashCode());
+        return "trans:" + sourceLang + ":" + targetLang + ":" + text;
     }
 
     /**

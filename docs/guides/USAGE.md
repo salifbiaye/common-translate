@@ -643,7 +643,7 @@ public ResponseEntity<UserResponse> getRawData(@PathVariable String id) {
 Override configuration per environment:
 
 ```yaml
-# application-dev.yml
+# application-docker-compose.yml
 translate:
   enabled: true
   libretranslate:

@@ -6,13 +6,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.MethodParameter;
 import org.springframework.data.domain.Page;
+import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
+import org.springframework.http.converter.ByteArrayHttpMessageConverter;
 import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.ResourceHttpMessageConverter;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
+import java.io.InputStream;
 import java.util.List;
 import java.util.Locale;
 
@@ -39,11 +43,25 @@ public class TranslationResponseAdvice implements ResponseBodyAdvice<Object> {
     private String sourceLanguage;
 
     /**
-     * This advice supports all response types.
+     * This advice supports all response types EXCEPT binary file responses.
+     * Binary responses (Excel files, PDFs, images) should not be translated.
      */
     @Override
     public boolean supports(MethodParameter returnType, Class<? extends HttpMessageConverter<?>> converterType) {
-        return translationEnabled;
+        if (!translationEnabled) {
+            return false;
+        }
+
+        // Don't translate binary responses (file downloads)
+        if (ByteArrayHttpMessageConverter.class.isAssignableFrom(converterType)) {
+            return false;
+        }
+
+        if (ResourceHttpMessageConverter.class.isAssignableFrom(converterType)) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -61,13 +79,25 @@ public class TranslationResponseAdvice implements ResponseBodyAdvice<Object> {
             return null;
         }
 
+        // Defense-in-depth: Skip binary data types (file downloads)
+        if (body instanceof byte[] || body instanceof Resource || body instanceof InputStream) {
+            log.trace("⏭️  Skipping translation for binary response: {}", body.getClass().getSimpleName());
+            return body;
+        }
+
+        // Skip binary media types (Excel, PDF, images, etc.)
+        if (selectedContentType != null && isBinaryMediaType(selectedContentType)) {
+            log.trace("⏭️  Skipping translation for binary media type: {}", selectedContentType);
+            return body;
+        }
+
         // Extract target language from Accept-Language header
         String targetLang = extractLanguage(request);
 
         // IMPORTANT: Always process responses, even for source language!
         // Reason: Enum labels must be generated even when targetLang == sourceLanguage
         // because field names are in English but content is in source language
-        log.info("🌐 Processing response for language: {} (source: {})", targetLang, sourceLanguage);
+        log.debug("🌐 Processing response for language: {} (source: {})", targetLang, sourceLanguage);
 
         try {
             // Translate String responses (messages, errors)
@@ -135,5 +165,35 @@ public class TranslationResponseAdvice implements ResponseBodyAdvice<Object> {
 
         log.trace("Extracted language '{}' from Accept-Language header: {}", lang, languages.get(0));
         return lang;
+    }
+
+    /**
+     * Checks if the media type represents binary content that should not be translated.
+     *
+     * @param mediaType The media type to check
+     * @return true if the media type is binary (Excel, PDF, images, etc.)
+     */
+    private boolean isBinaryMediaType(MediaType mediaType) {
+        // Skip images
+        if (mediaType.getType().equals("image")) {
+            return true;
+        }
+
+        // Skip video and audio
+        if (mediaType.getType().equals("video") || mediaType.getType().equals("audio")) {
+            return true;
+        }
+
+        // Skip common binary application types
+        String subtype = mediaType.getSubtype().toLowerCase();
+        return subtype.contains("octet-stream")
+                || subtype.contains("pdf")
+                || subtype.contains("zip")
+                || subtype.contains("excel")
+                || subtype.contains("spreadsheet")
+                || subtype.contains("word")
+                || subtype.contains("msword")
+                || subtype.contains("powerpoint")
+                || subtype.contains("presentation");
     }
 }

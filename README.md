@@ -73,7 +73,18 @@ translate:
 
 **C'est tout!** Vos réponses API seront automatiquement traduites selon le header `Accept-Language`.
 
-## How It Works
+## 📑 Table des Matières
+
+1. [Fonctionnalités](#-fonctionnalités)
+2. [Démarrage Rapide](#quick-start)
+3. [Architecture du Cache](#️-architecture-du-cache-à-deux-niveaux-v103)
+4. [API de Métadonnées](#field-metadata-endpoint)
+5. [Labels d'Énumérations](#enum-label-generation)
+6. [Configuration](#configuration-options)
+7. [Infrastructure](#infrastructure-setup)
+8. [Documentation](#-documentation-complète)
+
+## 🏗️ Comment ça Fonctionne
 
 ```
 Frontend → Accept-Language: en
@@ -520,7 +531,54 @@ Aucun appel Redis, aucun appel LibreTranslate!
 
 **Taux de cache hit en production:** > 99%
 
-### Cache Configuration
+### 🔑 Namespaces Redis par Module
+
+**Important:** Chaque module utilise son propre préfixe Redis pour éviter les collisions.
+
+```redis
+# Différents modules dans le même Redis
+trans:*           ← common-translate (ce module)
+audit:*           ← common-audit
+session:*         ← user sessions
+ratelimit:*       ← rate limiting
+```
+
+**Exemples de clés pour common-translate:**
+
+```redis
+trans:fr:en:Admin                      → "Administrator"
+trans:fr:en:Administrateur système     → "System Administrator"
+trans:fr:es:Client bancaire            → "Customer bancario"
+trans:en:fr:Hello World                → "Bonjour le monde"
+```
+
+**Format:** `trans:{source}:{target}:{texte}`
+
+**Avantages:**
+- ✅ Lisible: Tu vois exactement ce qui est traduit
+- ✅ Debugging facile: `redis-cli KEYS "trans:*"`
+- ✅ Maintenance: `redis-cli KEYS "trans:*" | xargs redis-cli DEL` (supprime seulement les traductions)
+- ✅ Pas de collision: Chaque module a son namespace
+
+**Commandes utiles:**
+
+```bash
+# Voir toutes les traductions
+redis-cli KEYS "trans:*"
+
+# Voir une traduction spécifique
+redis-cli GET "trans:fr:en:Admin"
+# → "Administrator"
+
+# Supprimer toutes les traductions (reset cache)
+redis-cli KEYS "trans:*" | xargs redis-cli DEL
+
+# Les autres modules ne sont PAS affectés
+redis-cli KEYS "audit:*"  # Toujours là
+redis-cli KEYS "session:*"  # Toujours là
+```
+
+### Configuration du Cache
 
 ```yaml
 translate:
@@ -557,13 +615,71 @@ services:
 - ✅ Collections (List<UserResponse>)
 - ✅ Paginated responses (Page<UserResponse>)
 
-## Requirements
+## 📚 Documentation Complète
 
-- Spring Boot 3.x
-- Redis server
-- LibreTranslate server
-- Java 17+
+- **[GUIDE.md](docs/GUIDE.md)** - Guide d'utilisation complet avec exemples détaillés
+  - Installation pas à pas
+  - Configuration avancée
+  - Annotations expliquées
+  - API de métadonnées
+  - Scénarios d'utilisation
+  - Troubleshooting
 
-## License
+- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Architecture technique du système de cache
+  - Cache à deux niveaux (Caffeine + Redis)
+  - Mécanisme de synchronisation
+  - Protection anti-stampede
+  - Structure des clés Redis
+  - Flux de cache détaillé
+  - Métriques de performance
 
-This module is part of the SIB Banking CRM project.
+- **[CHANGELOG.md](CHANGELOG.md)** - Historique des versions et changements
+
+## 🎯 Prérequis
+
+- **Java 17+**
+- **Spring Boot 3.5.5+**
+- **Redis** (pour cache distribué)
+- **LibreTranslate** (pour traduction)
+
+## 🚢 Déploiement Production
+
+```yaml
+# docker-compose.yml
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    ports:
+      - "5000:5000"
+    environment:
+      - LT_LOAD_ONLY=fr,en,es,de,it,pt
+      - LT_SUGGESTIONS=false
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+```
+
+## 📝 Licence
+
+Ce module fait partie du projet SIB Banking CRM.
+
+## 🤝 Support
+
+Pour toute question ou problème:
+1. Consultez [GUIDE.md](docs/GUIDE.md) pour l'utilisation
+2. Consultez [ARCHITECTURE.md](docs/ARCHITECTURE.md) pour les détails techniques
+3. Vérifiez que LibreTranslate fonctionne: `curl http://localhost:5000/languages`
+4. Vérifiez que Redis fonctionne: `redis-cli ping`
+
+---
+
+**Version:** v1.0.3
+**Dernière mise à jour:** 2025-10-26
